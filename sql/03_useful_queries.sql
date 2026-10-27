@@ -46,11 +46,25 @@ SELECT patient_name, doctor_name, department_name,
   FROM V_PATIENT_APPOINTMENTS
  ORDER BY appointment_date DESC, appointment_time;
 
-PROMPT --- Doctor schedule (change the date as needed) ---
+PROMPT --- Doctor schedule (active visits from today onwards) ---
 SELECT doctor_name, patient_name, appointment_date, appointment_time, status
   FROM V_PATIENT_APPOINTMENTS
  WHERE appointment_date >= TRUNC(SYSDATE)
+   AND status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation')
  ORDER BY doctor_name, appointment_date, appointment_time;
+
+-- Queue order uses status then booked time; the model has no arrival or triage-priority field.
+PROMPT --- Today's appointment queue (waiting, checked-in, then scheduled) ---
+SELECT appointment_id, patient_name, doctor_name, department_name,
+       appointment_date, appointment_time, status
+  FROM V_PATIENT_APPOINTMENTS
+ WHERE appointment_date = TRUNC(SYSDATE)
+ ORDER BY CASE status
+              WHEN 'Waiting' THEN 1 WHEN 'Checked In' THEN 2 WHEN 'Scheduled' THEN 3
+              WHEN 'In Consultation' THEN 4 WHEN 'Completed' THEN 5
+              WHEN 'No-show' THEN 6 WHEN 'Cancelled' THEN 7 ELSE 8
+          END,
+          appointment_time, appointment_id;
 
 PROMPT --- Appointment counts by date and status ---
 SELECT TRUNC(appointment_date) AS appointment_day, status, COUNT(*) AS appointment_count

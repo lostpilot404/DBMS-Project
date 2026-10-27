@@ -1,13 +1,15 @@
 """Parameterized JSON API for the Hospital Management System."""
 from __future__ import annotations
 
+import csv
+import io
 import re
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request
 
 
 api = Blueprint("api", __name__)
@@ -36,7 +38,19 @@ def _field(kind: str, *, required: bool = False, max_length: int | None = None,
 
 GENDERS = ("M", "F", "O")
 BLOOD_GROUPS = ("A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-")
-APPOINTMENT_STATUSES = ("Scheduled", "Completed", "Cancelled")
+APPOINTMENT_STATUSES = (
+    "Scheduled", "Checked In", "Waiting", "In Consultation",
+    "Completed", "Cancelled", "No-show",
+)
+APPOINTMENT_TRANSITIONS = {
+    "Scheduled": ("Checked In", "Cancelled", "No-show"),
+    "Checked In": ("Waiting",),
+    "Waiting": ("In Consultation",),
+    "In Consultation": ("Completed",),
+    "Completed": (),
+    "Cancelled": (),
+    "No-show": (),
+}
 ROOM_STATUSES = ("Available", "Occupied", "Maintenance")
 BILL_STATUSES = ("Paid", "Pending")
 
@@ -252,7 +266,7 @@ REPORTS: dict[str, dict[str, Any]] = {
                   "FROM Appointment a JOIN Patient p ON p.patient_id = a.patient_id "
                   "JOIN Doctor d ON d.doctor_id = a.doctor_id "
                   "JOIN Department dep ON dep.department_id = d.department_id",
-        "base_where": ["a.status = 'Scheduled'", "a.appointment_date >= TRUNC(SYSDATE)"],
+        "base_where": ["a.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation')", "a.appointment_date >= TRUNC(SYSDATE)"],
         "order": "appointment_date, appointment_time, doctor_name",
         "filters": {"doctor_id": ("a.doctor_id", "id")},
         "date_column": "a.appointment_date",
@@ -375,6 +389,8 @@ def dashboard():
                 "(SELECT COUNT(*) FROM Appointment) AS appointments, "
                 "(SELECT COUNT(*) FROM Appointment WHERE status = 'Scheduled' "
                 " AND appointment_date >= TRUNC(SYSDATE)) AS upcoming_appointments, "
+                "(SELECT COUNT(*) FROM Appointment WHERE appointment_date = TRUNC(SYSDATE) "
+                " AND status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation')) AS today_queue_appointments, "
                 "(SELECT COUNT(*) FROM Appointment WHERE status = 'Completed') AS completed_appointments, "
                 "(SELECT COUNT(*) FROM Appointment WHERE status = 'Cancelled') AS cancelled_appointments, "
                 "(SELECT COUNT(*) FROM Admission WHERE discharge_date IS NULL) AS active_admissions, "
@@ -499,6 +515,28 @@ def report_rows(report_name: str):
     return jsonify({"data": rows, "meta": {"pagination": pagination}})
 
 
+@api.get("/api/reports/<string:report_name>/csv")
+def report_csv(report_name: str):
+    """Export every row matching the report's validated filters, not just one UI page."""
+    if report_name not in REPORTS:
+        raise ApiError("Unknown report.", 404, "not_found")
+    with _db().connection() as connection:
+        with connection.cursor() as cursor:
+            query, binds, _filtered_sql = _build_report_query(report_name, request.args)
+            cursor.execute(query, binds)
+            headers = [column[0].lower() for column in cursor.description]
+            rows = cursor.fetchall()
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\r\n")
+    writer.writerow([_csv_header(header) for header in headers])
+    writer.writerows([_csv_value(value) for value in row] for row in rows)
+    response = Response(output.getvalue(), content_type="text/csv; charset=utf-8")
+    response.headers["Content-Disposition"] = f'attachment; filename="{report_name}.csv"'
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @api.get("/api/patients/<int:patient_id>/summary")
 def patient_summary(patient_id: int):
     with _db().connection() as connection:
@@ -515,7 +553,125 @@ def patient_summary(patient_id: int):
                 }[name]
                 cursor.execute(spec["select"] + f" WHERE {column} = :patient_id ORDER BY {spec['order']}", {"patient_id": patient_id})
                 related[name] = _fetch_rows(cursor)
-    return jsonify({"data": {"patient": patient, **related}})
+    return jsonify({"data": {
+        "patient": patient,
+        **related,
+        "timeline": _patient_timeline(related),
+    }})
+
+
+def _patient_timeline(related: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Combine only stored patient facts into a newest-first administrative timeline."""
+    events: list[dict[str, Any]] = []
+
+    def add(record_date: Any, record_time: Any, kind: str, details: str,
+            status: str, record_id: Any) -> None:
+        if not record_date:
+            return
+        events.append({
+            "date": str(record_date)[:10],
+            "time": str(record_time) if record_time else None,
+            "type": kind,
+            "details": details,
+            "status": status,
+            "record_id": record_id,
+        })
+
+    for row in related.get("appointments", []):
+        add(
+            row.get("appointment_date"), row.get("appointment_time"), "Appointment",
+            " · ".join(part for part in (row.get("doctor_name"), row.get("department_name")) if part),
+            str(row.get("status") or "Recorded"), row.get("appointment_id"),
+        )
+
+    for row in related.get("admissions", []):
+        room = f"Room {row.get('room_number')}" if row.get("room_number") else "Room not recorded"
+        active = not row.get("discharge_date")
+        admission_id = row.get("admission_id")
+        add(row.get("admission_date"), None, "Admission", room,
+            "Active stay" if active else "Discharged", admission_id)
+        if row.get("discharge_date"):
+            add(row.get("discharge_date"), None, "Discharge", room,
+                "Room released", admission_id)
+
+    for row in related.get("prescriptions", []):
+        details = " · ".join(part for part in (
+            row.get("medicine_name"), row.get("dosage"), row.get("duration"),
+            row.get("doctor_name"),
+        ) if part)
+        add(row.get("prescription_date"), None, "Prescription", details,
+            "Instruction recorded; dispensing not recorded", row.get("prescription_id"))
+
+    for row in related.get("bills", []):
+        total = row.get("total_amount")
+        if total is None:
+            details = "Bill total not recorded"
+        else:
+            try:
+                details = f"Bill total ₹{Decimal(str(total)):,.2f}"
+            except (InvalidOperation, ValueError):
+                details = f"Bill total {total}"
+        add(row.get("bill_date"), None, "Bill", details,
+            str(row.get("payment_status") or "Status not recorded"), row.get("bill_id"))
+
+    events.sort(key=lambda event: (
+        event["date"], event["time"] or "", event["type"], str(event["record_id"] or ""),
+    ), reverse=True)
+    return events
+
+
+@api.get("/api/appointments/queue")
+def appointment_queue():
+    """Return one database-backed day's appointments in deterministic queue order."""
+    raw_date = request.args.get("date")
+    if not raw_date:
+        raise ApiError("Queue date is required.")
+    queue_date = _validate_date(raw_date, "date")
+    binds: dict[str, Any] = {"queue_date": queue_date}
+    where = ["a.appointment_date = :queue_date"]
+    raw_doctor_id = request.args.get("doctor_id")
+    doctor_id = None
+    if raw_doctor_id not in (None, ""):
+        doctor_id = _parse_integer(raw_doctor_id, "doctor_id", minimum=1, maximum=9_999_999_999)
+        where.append("a.doctor_id = :doctor_id")
+        binds["doctor_id"] = doctor_id
+
+    where_sql = " AND ".join(where)
+    with _db().connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT a.appointment_id AS appointment_id, a.patient_id AS patient_id, "
+                "p.patient_name AS patient_name, a.doctor_id AS doctor_id, "
+                "d.doctor_name AS doctor_name, dep.department_name AS department_name, "
+                "a.appointment_date AS appointment_date, a.appointment_time AS appointment_time, "
+                "a.status AS status FROM Appointment a "
+                "JOIN Patient p ON p.patient_id = a.patient_id "
+                "JOIN Doctor d ON d.doctor_id = a.doctor_id "
+                "JOIN Department dep ON dep.department_id = d.department_id "
+                f"WHERE {where_sql} "
+                "ORDER BY CASE a.status "
+                "WHEN 'Waiting' THEN 1 WHEN 'Checked In' THEN 2 WHEN 'Scheduled' THEN 3 "
+                "WHEN 'In Consultation' THEN 4 WHEN 'Completed' THEN 5 "
+                "WHEN 'No-show' THEN 6 WHEN 'Cancelled' THEN 7 ELSE 8 END, "
+                "a.appointment_time, a.appointment_id",
+                binds,
+            )
+            rows = _fetch_rows(cursor)
+
+    counts = {status: 0 for status in APPOINTMENT_STATUSES}
+    for row in rows:
+        counts[row["status"]] = counts.get(row["status"], 0) + 1
+    next_patient = next((
+        row for row in rows
+        if row["status"] in ("Waiting", "Checked In", "Scheduled")
+    ), None)
+    return jsonify({"data": {
+        "date": queue_date.date().isoformat(),
+        "doctor_id": doctor_id,
+        "rows": rows,
+        "counts": counts,
+        "next_patient": next_patient,
+    }})
 
 
 @api.get("/api/details/<string:resource_name>/<int:record_id>")
@@ -584,6 +740,8 @@ def collection(resource_name: str):
     if resource_name == "rooms" and values.get("availability_status") == "Occupied":
         raise ApiError("Rooms are marked Occupied when an active admission is created.", 400)
     if resource_name == "appointments":
+        if values.get("status") != "Scheduled":
+            raise ApiError("New appointments must start as Scheduled; use the appointment workflow for status changes.")
         _validate_scheduled_appointment(values)
     columns = list(values)
     placeholders = [f":{column}" for column in columns]
@@ -862,7 +1020,9 @@ def _validate_scheduled_appointment(values: dict[str, Any]) -> None:
 
 
 def _update_appointment(appointment_id: int, values: dict[str, Any]) -> None:
-    """Lock the row, validate its transition, then update within one transaction."""
+    """Lock the row, validate its state transition, then update atomically."""
+    booking_fields = {"patient_id", "doctor_id", "appointment_date", "appointment_time"}
+    terminal_statuses = {"Completed", "Cancelled", "No-show"}
     with _transaction(_db()) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -876,24 +1036,51 @@ def _update_appointment(appointment_id: int, values: dict[str, Any]) -> None:
 
             columns = ("patient_id", "doctor_id", "appointment_date", "appointment_time", "status")
             current_values = dict(zip(columns, current))
-            changed = any(
-                key in values and values[key] != current_values[key]
-                for key in columns
-            )
+            changed_fields = {
+                key for key in columns
+                if key in values and values[key] != current_values[key]
+            }
             current_status = current_values["status"]
             effective_status = values.get("status", current_status)
             effective_date = values.get("appointment_date", current_values["appointment_date"])
+            effective_day = effective_date.date() if isinstance(effective_date, datetime) else effective_date
+            booking_changes = changed_fields & booking_fields
+            status_changed = effective_status != current_status
 
-            if current_status in ("Completed", "Cancelled") and changed:
+            if current_status in terminal_statuses and changed_fields:
                 raise ApiError(
-                    "Completed and cancelled appointments are read-only history.",
+                    "Completed, cancelled, and no-show appointments are read-only history.",
                     409,
                     "appointment_history",
                 )
-            if effective_status != current_status and current_status != "Scheduled":
-                raise ApiError("Only a scheduled appointment can change status.", 409, "invalid_status_transition")
-            if effective_status == "Scheduled" and effective_date.date() < date.today():
+            if booking_changes and current_status != "Scheduled":
+                raise ApiError(
+                    "Only a scheduled appointment can be rescheduled.",
+                    409,
+                    "appointment_history",
+                )
+            if status_changed and booking_changes:
+                raise ApiError("Change booking details and appointment status in separate steps.", 409, "invalid_status_transition")
+            if status_changed and effective_status not in APPOINTMENT_TRANSITIONS[current_status]:
+                raise ApiError(
+                    f"Invalid appointment transition from {current_status} to {effective_status}.",
+                    409,
+                    "invalid_status_transition",
+                )
+
+            cursor.execute("SELECT TRUNC(SYSDATE) FROM dual")
+            database_today_value = cursor.fetchone()[0]
+            database_today = (
+                database_today_value.date()
+                if isinstance(database_today_value, datetime)
+                else database_today_value
+            )
+            if effective_status == "Scheduled" and effective_day < database_today:
                 raise ApiError("A scheduled appointment must not be in the past.")
+            if status_changed and effective_status == "Checked In" and effective_day != database_today:
+                raise ApiError("Patients can be checked in only on the appointment date.", 409, "appointment_not_today")
+            if status_changed and effective_status == "No-show" and effective_day >= database_today:
+                raise ApiError("An appointment can be marked No-show only after its date has passed.", 409, "appointment_not_overdue")
 
             assignments = ", ".join(f"{column} = :{column}" for column in values)
             binds = {**values, "appointment_id": appointment_id}
@@ -969,7 +1156,8 @@ def _update_room(room_id: int, values: dict[str, Any]) -> None:
             cursor.execute(f"UPDATE Room SET {assignments} WHERE room_id = :room_id", binds)
 
 
-def _list_report(cursor: Any, name: str, args: Any) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def _build_report_query(name: str, args: Any) -> tuple[str, dict[str, Any], str]:
+    """Build the shared, allowlisted filtered query used by page and CSV exports."""
     spec = REPORTS[name]
     where = list(spec.get("base_where", []))
     binds: dict[str, Any] = {}
@@ -977,17 +1165,17 @@ def _list_report(cursor: Any, name: str, args: Any) -> tuple[list[dict[str, Any]
         "appointment_status": APPOINTMENT_STATUSES,
         "bill_status": BILL_STATUSES,
     }
-    for name_key, (column, kind) in spec.get("filters", {}).items():
-        raw = args.get(name_key)
+    for filter_name, (column, kind) in spec.get("filters", {}).items():
+        raw = args.get(filter_name)
         if raw is None or raw == "":
             continue
         if kind == "id":
-            binds[f"filter_{name_key}"] = _parse_integer(raw, name_key, minimum=1, maximum=9_999_999_999)
+            binds[f"filter_{filter_name}"] = _parse_integer(raw, filter_name, minimum=1, maximum=9_999_999_999)
         else:
             if raw not in filter_choices[kind]:
-                raise ApiError(f"Invalid {name_key} filter.")
-            binds[f"filter_{name_key}"] = raw
-        where.append(f"{column} = :filter_{name_key}")
+                raise ApiError(f"Invalid {filter_name} filter.")
+            binds[f"filter_{filter_name}"] = raw
+        where.append(f"{column} = :filter_{filter_name}")
 
     date_bounds: dict[str, date] = {}
     if "date_column" in spec:
@@ -1001,19 +1189,23 @@ def _list_report(cursor: Any, name: str, args: Any) -> tuple[list[dict[str, Any]
         if len(date_bounds) == 2 and date_bounds["date_from"] > date_bounds["date_to"]:
             raise ApiError("date_from must be on or before date_to.")
 
+    where_sql = " WHERE " + " AND ".join(where) if where else ""
+    filtered_sql = spec["select"] + where_sql + spec.get("group_by", "")
+    query = filtered_sql + " ORDER BY " + spec["order"]
+    return query, binds, filtered_sql
+
+
+def _list_report(cursor: Any, name: str, args: Any) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    query, binds, filtered_sql = _build_report_query(name, args)
     page = _parse_integer(args.get("page", "1"), "page", minimum=1, maximum=1_000_000)
     page_size = _parse_integer(args.get("page_size", "25"), "page_size", minimum=1, maximum=100)
-    where_sql = " WHERE " + " AND ".join(where) if where else ""
-    group_sql = spec.get("group_by", "")
-    filtered_sql = spec["select"] + where_sql + group_sql
     cursor.execute(f"SELECT COUNT(*) FROM ({filtered_sql}) report_count", binds)
     total = int(cursor.fetchone()[0])
     pages = max(1, (total + page_size - 1) // page_size)
     page = min(page, pages)
     page_binds = {**binds, "page_offset": (page - 1) * page_size, "page_size": page_size}
     cursor.execute(
-        filtered_sql + " ORDER BY " + spec["order"]
-        + " OFFSET :page_offset ROWS FETCH NEXT :page_size ROWS ONLY",
+        query + " OFFSET :page_offset ROWS FETCH NEXT :page_size ROWS ONLY",
         page_binds,
     )
     return _fetch_rows(cursor), {
@@ -1022,6 +1214,29 @@ def _list_report(cursor: Any, name: str, args: Any) -> tuple[list[dict[str, Any]
         "total": total,
         "pages": max(1, (total + page_size - 1) // page_size),
     }
+
+
+def _csv_header(name: str) -> str:
+    return name.replace("_", " ").title()
+
+
+def _csv_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        text = value.date().isoformat() if value.time() == time.min else value.isoformat(timespec="seconds")
+    elif isinstance(value, date):
+        text = value.isoformat()
+    elif isinstance(value, Decimal):
+        text = format(value, "f")
+    else:
+        text = str(value)
+    if isinstance(value, str):
+        formula_prefix = text.lstrip(" \t\r\n").startswith(("=", "+", "-", "@"))
+        control_prefix = text.startswith(("\t", "\r", "\n"))
+        if formula_prefix or control_prefix:
+            return "'" + text
+    return text
 
 
 def _list_resource(cursor: Any, name: str, args: Any) -> tuple[list[dict[str, Any]], dict[str, int]]:

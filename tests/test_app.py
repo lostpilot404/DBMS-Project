@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import unittest
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from hms import create_app
-from hms.api import ApiError, RESOURCES, _validate_payload
+from hms.api import ApiError, APPOINTMENT_STATUSES, RESOURCES, _csv_value, _patient_timeline, _validate_payload
 from hms.database import OracleDatabase
 
 
@@ -59,10 +59,60 @@ class FakeCursor:
         elif normalized.startswith("SELECT 1 AS OK FROM DUAL"):
             self.description = [("OK",)]
             self._one = (1,)
+        elif normalized.startswith("SELECT TRUNC(SYSDATE) FROM DUAL"):
+            self.description = [("TRUNC(SYSDATE)",)]
+            self._one = (self.database.database_today,)
+        elif normalized.startswith("SELECT PATIENT_ID, DOCTOR_ID, APPOINTMENT_DATE, APPOINTMENT_TIME, STATUS FROM APPOINTMENT WHERE APPOINTMENT_ID"):
+            self.description = [(name,) for name in ("PATIENT_ID", "DOCTOR_ID", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "STATUS")]
+            self._one = self.database.appointment_row
+        elif "ORDER BY CASE A.STATUS" in normalized and "FROM APPOINTMENT A" in normalized:
+            self.description = [(name,) for name in (
+                "APPOINTMENT_ID", "PATIENT_ID", "PATIENT_NAME", "DOCTOR_ID", "DOCTOR_NAME",
+                "DEPARTMENT_NAME", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "STATUS",
+            )]
+            self._many = list(self.database.queue_rows)
+        elif normalized.startswith("SELECT A.APPOINTMENT_ID AS APPOINTMENT_ID, A.APPOINTMENT_DATE"):
+            self.description = [(name,) for name in (
+                "APPOINTMENT_ID", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "STATUS", "PATIENT_ID",
+                "PATIENT_NAME", "DOCTOR_ID", "DOCTOR_NAME", "DEPARTMENT_NAME",
+            )]
+            self._many = list(self.database.report_rows)
+        elif normalized.startswith("SELECT P.PATIENT_ID AS PATIENT_ID, P.PATIENT_NAME AS PATIENT_NAME"):
+            self.description = [(name,) for name in (
+                "PATIENT_ID", "PATIENT_NAME", "DATE_OF_BIRTH", "GENDER", "PHONE", "ADDRESS", "BLOOD_GROUP",
+            )]
+            self._one = self.database.patient_record
+        elif "FROM APPOINTMENT A" in normalized and "WHERE A.PATIENT_ID = :PATIENT_ID" in normalized:
+            self.description = [(name,) for name in (
+                "APPOINTMENT_ID", "PATIENT_ID", "PATIENT_NAME", "DOCTOR_ID", "DOCTOR_NAME",
+                "DEPARTMENT_NAME", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "STATUS",
+            )]
+            self._many = list(self.database.related_records["appointments"])
+        elif "FROM ADMISSION A" in normalized and "WHERE A.PATIENT_ID = :PATIENT_ID" in normalized:
+            self.description = [(name,) for name in (
+                "ADMISSION_ID", "PATIENT_ID", "PATIENT_NAME", "ROOM_ID", "ROOM_NUMBER",
+                "ADMISSION_DATE", "DISCHARGE_DATE",
+            )]
+            self._many = list(self.database.related_records["admissions"])
+        elif "FROM PRESCRIPTION RX" in normalized and "WHERE RX.PATIENT_ID = :PATIENT_ID" in normalized:
+            self.description = [(name,) for name in (
+                "PRESCRIPTION_ID", "PATIENT_ID", "PATIENT_NAME", "DOCTOR_ID", "DOCTOR_NAME",
+                "MEDICINE_ID", "MEDICINE_NAME", "DOSAGE", "DURATION", "PRESCRIPTION_DATE",
+            )]
+            self._many = list(self.database.related_records["prescriptions"])
+        elif "FROM BILL B" in normalized and "WHERE B.PATIENT_ID = :PATIENT_ID" in normalized:
+            self.description = [(name,) for name in (
+                "BILL_ID", "PATIENT_ID", "PATIENT_NAME", "BILL_DATE", "CONSULTATION_CHARGE",
+                "ROOM_CHARGE", "MEDICINE_CHARGE", "TOTAL_AMOUNT", "PAYMENT_STATUS",
+            )]
+            self._many = list(self.database.related_records["bills"])
+        elif normalized.startswith("SELECT DEP.DEPARTMENT_ID AS DEPARTMENT_ID"):
+            self.description = [(name,) for name in ("DEPARTMENT_ID", "DEPARTMENT_NAME", "LOCATION", "DOCTOR_COUNT")]
+            self._many = list(self.database.report_rows)
         elif normalized.startswith("SELECT (SELECT COUNT(*) FROM PATIENT)"):
             summary_columns = (
                 "PATIENTS", "DOCTORS", "DEPARTMENTS", "APPOINTMENTS",
-                "UPCOMING_APPOINTMENTS", "COMPLETED_APPOINTMENTS", "CANCELLED_APPOINTMENTS",
+                "UPCOMING_APPOINTMENTS", "TODAY_QUEUE_APPOINTMENTS", "COMPLETED_APPOINTMENTS", "CANCELLED_APPOINTMENTS",
                 "ACTIVE_ADMISSIONS", "TOTAL_ROOMS", "AVAILABLE_ROOMS", "OCCUPIED_ROOMS",
                 "MAINTENANCE_ROOMS", "TOTAL_MEDICINES", "LOW_STOCK_MEDICINES",
                 "PENDING_BILLS", "PAID_BILLS", "OUTSTANDING_TOTAL", "COLLECTED_TOTAL",
@@ -116,12 +166,22 @@ class FakeConnection:
 
 
 class FakeDatabase:
-    def __init__(self, execute_error=None, returning_id=41, update_rowcount=1, stock_quantity=7, admission_row=None):
+    def __init__(self, execute_error=None, returning_id=41, update_rowcount=1, stock_quantity=7,
+                 admission_row=None, appointment_row=None, database_today=None,
+                 queue_rows=None, report_rows=None, patient_record=None, related_records=None):
         self.execute_error = execute_error
         self.returning_id = returning_id
         self.update_rowcount = update_rowcount
         self.stock_quantity = stock_quantity
         self.admission_row = admission_row
+        self.appointment_row = appointment_row
+        self.database_today = database_today or datetime.combine(date.today(), time.min)
+        self.queue_rows = queue_rows or []
+        self.report_rows = report_rows or []
+        self.patient_record = patient_record
+        self.related_records = related_records or {
+            "appointments": [], "admissions": [], "prescriptions": [], "bills": [],
+        }
         self.calls = []
         self.commits = 0
         self.rollbacks = 0
@@ -187,6 +247,47 @@ class ValidationTests(unittest.TestCase):
             _validate_payload(RESOURCES["patients"], {
                 "patient_name": "Future", "date_of_birth": future, "gender": "O",
             }, partial=False)
+
+
+class AppointmentAndExportHelperTests(unittest.TestCase):
+    def test_status_vocabulary_covers_queue_and_terminal_states(self):
+        self.assertEqual(APPOINTMENT_STATUSES, (
+            "Scheduled", "Checked In", "Waiting", "In Consultation",
+            "Completed", "Cancelled", "No-show",
+        ))
+
+    def test_patient_timeline_merges_only_stored_events_in_date_order(self):
+        timeline = _patient_timeline({
+            "appointments": [{
+                "appointment_id": 2, "appointment_date": "2026-06-10", "appointment_time": "09:00",
+                "doctor_name": "Dr. Rao", "department_name": "Cardiology", "status": "Completed",
+            }],
+            "admissions": [{
+                "admission_id": 3, "admission_date": "2026-06-11", "discharge_date": "2026-06-12",
+                "room_number": "R-1",
+            }],
+            "prescriptions": [{
+                "prescription_id": 4, "prescription_date": "2026-06-13", "medicine_name": "Example",
+                "dosage": "1 tablet", "duration": "5 days", "doctor_name": "Dr. Rao",
+            }],
+            "bills": [{
+                "bill_id": 5, "bill_date": "2026-06-14", "total_amount": 10.0,
+                "payment_status": "Pending",
+            }],
+        })
+        self.assertEqual([event["date"] for event in timeline], [
+            "2026-06-14", "2026-06-13", "2026-06-12", "2026-06-11", "2026-06-10",
+        ])
+        self.assertIn("₹10.00", timeline[0]["details"])
+        self.assertEqual(timeline[1]["type"], "Prescription")
+        self.assertIn("dispensing not recorded", timeline[1]["status"])
+        self.assertEqual(timeline[2]["type"], "Discharge")
+
+    def test_csv_values_preserve_numbers_and_neutralize_formula_text(self):
+        self.assertEqual(_csv_value(Decimal("12.30")), "12.30")
+        self.assertEqual(_csv_value("=1+1"), "'=1+1")
+        self.assertEqual(_csv_value("  +SUM(A1:A2)"), "'  +SUM(A1:A2)")
+        self.assertEqual(_csv_value("\t=cmd"), "'\t=cmd")
 
 
 class ApiTests(unittest.TestCase):
@@ -283,6 +384,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.get_json()["data"]
         self.assertEqual(data["counts"]["patients"], 0)
+        self.assertIn("today_queue_appointments", data["counts"])
         self.assertIn("upcoming_appointments", data)
         self.assertIn("outstanding_bills", data)
         self.assertIn("low_stock_medicines", data)
@@ -318,6 +420,73 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(count_binds["filter_patient_id"], 31)
         unknown = self.client.get("/api/reports/not-a-report")
         self.assertEqual(unknown.status_code, 404)
+
+    def test_report_csv_exports_all_filtered_rows_without_page_limits(self):
+        database = FakeDatabase(report_rows=[
+            (1, datetime(2026, 6, 1), "09:00", "Waiting", 31, "=1+1", 7, "Dr. Rao", "Cardiology"),
+            (2, datetime(2026, 6, 2), "10:00", "Completed", 31, "Asha Patient", 7, "Dr. Rao", "Cardiology"),
+        ])
+        app = create_app(database=database, test_config={"TESTING": True})
+        response = app.test_client().get("/api/reports/patient-appointments/csv", query_string={
+            "patient_id": "31", "status": "Waiting", "date_from": "2026-06-01",
+            "date_to": "2026-06-30", "page": "99", "page_size": "1",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "text/csv")
+        self.assertIn("filename=\"patient-appointments.csv\"", response.headers["Content-Disposition"])
+        sql, binds = database.calls[0]
+        self.assertIn("a.patient_id = :filter_patient_id", sql)
+        self.assertIn("a.status = :filter_status", sql)
+        self.assertIn("a.appointment_date >= :date_from", sql)
+        self.assertIn("a.appointment_date < :date_to", sql)
+        self.assertNotIn("OFFSET", sql.upper())
+        self.assertEqual(binds["filter_patient_id"], 31)
+        self.assertEqual(binds["filter_status"], "Waiting")
+        self.assertEqual(len(response.get_data(as_text=True).splitlines()), 3)
+        self.assertIn("'=1+1", response.get_data(as_text=True))
+
+    def test_appointment_queue_is_date_and_doctor_filtered_and_ordered(self):
+        today = datetime.combine(date.today(), time.min)
+        database = FakeDatabase(queue_rows=[
+            (2, 22, "Waiting Patient", 7, "Dr. Rao", "Cardiology", today, "09:00", "Waiting"),
+            (1, 21, "Scheduled Patient", 7, "Dr. Rao", "Cardiology", today, "10:00", "Scheduled"),
+        ])
+        app = create_app(database=database, test_config={"TESTING": True})
+        response = app.test_client().get("/api/appointments/queue?date=" + date.today().isoformat() + "&doctor_id=7")
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()["data"]
+        self.assertEqual(data["counts"]["Waiting"], 1)
+        self.assertEqual(data["counts"]["Scheduled"], 1)
+        self.assertEqual(data["next_patient"]["patient_name"], "Waiting Patient")
+        sql, binds = database.calls[0]
+        self.assertIn("a.appointment_date = :queue_date", sql)
+        self.assertIn("a.doctor_id = :doctor_id", sql)
+        self.assertIn("ORDER BY CASE a.status", sql)
+        self.assertIn("WHEN 'Waiting' THEN 1", sql)
+        self.assertEqual(binds["doctor_id"], 7)
+        invalid = app.test_client().get("/api/appointments/queue?date=not-a-date")
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_patient_summary_includes_database_derived_unified_timeline(self):
+        database = FakeDatabase(
+            patient_record=(31, "Asha Patient", datetime(1990, 1, 2), "F", "+91-90000-00000", "Vellore", "O+"),
+            related_records={
+                "appointments": [(2, 31, "Asha Patient", 7, "Dr. Rao", "Cardiology", datetime(2026, 6, 1), "09:00", "Completed")],
+                "admissions": [(3, 31, "Asha Patient", 2, "R-1", datetime(2026, 6, 2), datetime(2026, 6, 3))],
+                "prescriptions": [(4, 31, "Asha Patient", 7, "Dr. Rao", 5, "Example medicine", "1 tablet", "5 days", datetime(2026, 6, 4))],
+                "bills": [(5, 31, "Asha Patient", datetime(2026, 6, 5), Decimal("10.00"), Decimal("0"), Decimal("0"), Decimal("10.00"), "Pending")],
+            },
+        )
+        app = create_app(database=database, test_config={"TESTING": True})
+        response = app.test_client().get("/api/patients/31/summary")
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()["data"]
+        self.assertEqual(data["patient"]["patient_id"], 31)
+        self.assertEqual([event["type"] for event in data["timeline"]], [
+            "Bill", "Prescription", "Discharge", "Admission", "Appointment",
+        ])
+        self.assertIn("dispensing not recorded", data["timeline"][1]["status"])
+        self.assertEqual(len(database.calls), 5)
 
     def test_low_stock_and_report_page_size_filters_are_validated(self):
         response = self.client.get("/api/medicines?low_stock=true")
@@ -366,6 +535,49 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(self.database.connection_count, 0)
 
+    def test_appointment_creation_must_start_scheduled(self):
+        response = self.client.post("/api/appointments", json={
+            "patient_id": 1, "doctor_id": 2, "appointment_date": date.today().isoformat(),
+            "appointment_time": "09:00", "status": "Completed",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("start as scheduled", response.get_json()["error"]["message"].lower())
+        self.assertEqual(self.database.connection_count, 0)
+
+    def test_appointment_workflow_rejects_skipped_states_and_checks_in_on_the_db_date(self):
+        today = datetime.combine(date.today(), time.min)
+        invalid_database = FakeDatabase(appointment_row=(1, 2, today, "09:00", "Scheduled"))
+        invalid_app = create_app(database=invalid_database, test_config={"TESTING": True})
+        invalid = invalid_app.test_client().put("/api/appointments/12", json={"status": "Completed"})
+        self.assertEqual(invalid.status_code, 409)
+        self.assertEqual(invalid.get_json()["error"]["code"], "invalid_status_transition")
+        self.assertFalse(any(sql.lstrip().upper().startswith("UPDATE APPOINTMENT") for sql, _ in invalid_database.calls))
+
+        database = FakeDatabase(appointment_row=(1, 2, today, "09:00", "Scheduled"))
+        app = create_app(database=database, test_config={"TESTING": True})
+        response = app.test_client().put("/api/appointments/12", json={"status": "Checked In"})
+        self.assertEqual(response.status_code, 200)
+        update_sql = next(sql for sql, _ in database.calls if sql.lstrip().upper().startswith("UPDATE APPOINTMENT"))
+        self.assertIn("status = :status", update_sql)
+        self.assertEqual(database.commits, 1)
+
+    def test_check_in_and_no_show_date_rules_are_enforced_before_update(self):
+        today = datetime.combine(date.today(), time.min)
+        future = datetime.combine(date.today() + timedelta(days=1), time.min)
+        database = FakeDatabase(appointment_row=(1, 2, future, "09:00", "Scheduled"))
+        app = create_app(database=database, test_config={"TESTING": True})
+        check_in = app.test_client().put("/api/appointments/12", json={"status": "Checked In"})
+        self.assertEqual(check_in.status_code, 409)
+        self.assertEqual(check_in.get_json()["error"]["code"], "appointment_not_today")
+        self.assertFalse(any(sql.lstrip().upper().startswith("UPDATE APPOINTMENT") for sql, _ in database.calls))
+
+        database = FakeDatabase(appointment_row=(1, 2, today, "09:00", "Scheduled"))
+        app = create_app(database=database, test_config={"TESTING": True})
+        no_show = app.test_client().put("/api/appointments/12", json={"status": "No-show"})
+        self.assertEqual(no_show.status_code, 409)
+        self.assertEqual(no_show.get_json()["error"]["code"], "appointment_not_overdue")
+        self.assertFalse(any(sql.lstrip().upper().startswith("UPDATE APPOINTMENT") for sql, _ in database.calls))
+
     def test_sql_integrity_and_seed_guards_are_declared(self):
         from pathlib import Path
         schema = Path("sql/01_create_schema.sql").read_text(encoding="utf-8")
@@ -375,7 +587,13 @@ class ApiTests(unittest.TestCase):
         self.assertIn("number(11,2) generated always as", schema.lower())
         seeds = Path("sql/02_sample_data.sql").read_text(encoding="utf-8").lower()
         self.assertGreaterEqual(seeds.count("a.patient_id = p.patient_id"), 2)
-        self.assertIn("a.status = 'scheduled'", seeds)
+        self.assertIn("a.status in ('scheduled', 'checked in', 'waiting', 'in consultation')", seeds)
+        self.assertIn("set status = 'checked in'", seeds)
+        self.assertIn("set status = 'completed'", seeds)
+        self.assertIn("returning appointment_id into v_appointment_id", seeds)
+        self.assertEqual(seeds.count("where appointment_id = v_appointment_id"), 5)
+        self.assertIn("'no-show'", schema.lower())
+        self.assertIn(":old.status = 'waiting' and :new.status = 'in consultation'", schema.lower())
 
 
 if __name__ == "__main__":

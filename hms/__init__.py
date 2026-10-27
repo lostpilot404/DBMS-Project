@@ -75,9 +75,17 @@ def create_app(database: Any | None = None, test_config: dict[str, Any] | None =
             if oracle_code == 20014:
                 return _error("active_admission", "Discharge the patient before changing or removing an active admission.", 409)
             if oracle_code == 20020:
-                return _error("appointment_history", "Completed and cancelled appointment history cannot be edited.", 409)
+                return _error("appointment_history", "Completed, cancelled, and no-show appointment history cannot be edited.", 409)
             if oracle_code == 20022:
                 return _error("appointment_in_past", "A scheduled appointment cannot be in the past.", 400)
+            if oracle_code == 20023:
+                return _error("invalid_appointment_start", "New appointments must start as Scheduled.", 400)
+            if oracle_code == 20024:
+                return _error("invalid_status_transition", "The requested appointment state transition or booking edit is not allowed.", 409)
+            if oracle_code == 20025:
+                return _error("appointment_not_today", "Patients can be checked in only on the appointment date.", 409)
+            if oracle_code == 20026:
+                return _error("appointment_not_overdue", "An appointment can be marked No-show only after its date has passed.", 409)
             if oracle_code in (20011, 20012, 20013):
                 return _error("room_unavailable", "That room is not available for this operation.", 409)
             if oracle_code in (3113, 3114, 12170, 12514, 12541, 12545, 12547):

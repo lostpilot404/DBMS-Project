@@ -69,6 +69,18 @@ SELECT trigger_name, status, triggering_event, table_name
  WHERE table_name IN ('APPOINTMENT', 'ADMISSION')
  ORDER BY table_name, trigger_name;
 
+PROMPT --- Appointment lifecycle status counts ---
+SELECT status, COUNT(*) AS appointment_count
+  FROM Appointment
+ GROUP BY status
+ ORDER BY status;
+
+PROMPT --- Today's active queue counts ---
+SELECT COUNT(*) AS appointments_in_today_queue
+  FROM Appointment
+ WHERE appointment_date = TRUNC(SYSDATE)
+   AND status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation');
+
 PROMPT --- View / trigger object status ---
 SELECT object_name, object_type, status
   FROM user_objects

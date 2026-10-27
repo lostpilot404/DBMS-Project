@@ -35,7 +35,7 @@ function renderIcon(name) {
 
 const CHOICES = {
   gender: [{ value: 'M', label: 'Male' }, { value: 'F', label: 'Female' }, { value: 'O', label: 'Other' }],
-  appointment_status: ['Scheduled', 'Completed', 'Cancelled'].map((value) => ({ value, label: value })),
+  appointment_status: ['Scheduled', 'Checked In', 'Waiting', 'In Consultation', 'Completed', 'Cancelled', 'No-show'].map((value) => ({ value, label: value })),
   room_status: ['Available', 'Occupied', 'Maintenance'].map((value) => ({ value, label: value })),
   room_type: ['General', 'Semi-private', 'Private', 'ICU'].map((value) => ({ value, label: value })),
   payment_status: ['Pending', 'Paid'].map((value) => ({ value, label: value })),
@@ -85,7 +85,7 @@ const MODULES = {
     ],
   },
   appointments: {
-    title: 'Appointments', description: 'Book, reschedule, complete, or cancel patient visits with conflict protection.',
+    title: 'Appointments', description: 'Book visits, manage the daily check-in queue, and preserve valid appointment history.',
     endpoint: 'appointments', addLabel: 'Book appointment', singular: 'appointment',
     columns: [{ key: 'appointment_date', label: 'Date', format: 'date', sort: true }, { key: 'appointment_time', label: 'Time', sort: true }, { key: 'patient_name', label: 'Patient', strong: true, sort: true }, { key: 'doctor_name', label: 'Doctor', sort: true }, { key: 'department_name', label: 'Department' }, { key: 'status', label: 'Status', format: 'status', sort: true }],
     fields: [
@@ -93,7 +93,6 @@ const MODULES = {
       { key: 'doctor_id', label: 'Doctor', type: 'related', source: 'doctors', required: true },
       { key: 'appointment_date', label: 'Appointment date', type: 'date', required: true },
       { key: 'appointment_time', label: 'Appointment time', type: 'time', required: true, hint: 'Use 24-hour time.' },
-      { key: 'status', label: 'Status', type: 'select', choices: 'appointment_status', required: true, default: 'Scheduled' },
     ],
     filters: [
       { key: 'patient_id', label: 'All patients', source: 'patients' },
@@ -204,7 +203,7 @@ const REPORTS = {
   },
   'doctor-schedule': {
     title: 'Upcoming doctor schedules',
-    description: 'Scheduled visits from today onwards, optionally filtered to one doctor.',
+    description: 'Scheduled and in-progress visits from today onwards, optionally filtered to one doctor.',
     filters: ['doctor_id', 'date_from', 'date_to'],
     columns: [{ key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'appointment_time', label: 'Time' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'patient_name', label: 'Patient' }, { key: 'department_name', label: 'Department' }, { key: 'status', label: 'Status', format: 'status' }],
   },
@@ -278,6 +277,7 @@ const state = {
   pageSize: 25,
   pagination: null,
   appointmentView: 'table',
+  queueData: null,
   reportId: 'department-doctor-counts',
   reportPage: 1,
   reportPagination: null,
@@ -406,7 +406,7 @@ function navigate(view, updateHistory = true) {
   state.direction = 'asc';
   state.page = 1;
   state.pagination = null;
-  state.appointmentView = 'table';
+  if (view !== 'appointments') state.appointmentView = 'table';
   renderNavigation();
   setMobileNavigation(false, { restoreFocus: false });
   const title = view === 'dashboard' ? 'Dashboard' : view === 'reports' ? 'Reports' : MODULES[view].title;
@@ -435,7 +435,7 @@ async function loadDashboard() {
 function renderDashboard(data) {
   const counts = data.counts || {};
   const cards = [
-    ['Upcoming appointments', counts.upcoming_appointments, 'appointments', 'Scheduled from today onward', 'appointments'],
+    ["Today's queue", counts.today_queue_appointments, 'appointments', 'Booked and in progress today', 'appointments', 'queue'],
     ['Active admissions', counts.active_admissions, 'admissions', 'Patients currently admitted', 'admissions'],
     ['Available rooms', counts.available_rooms, 'rooms', 'Ready for admission', 'rooms'],
     ['Pending bills', counts.pending_bills, 'bills', 'Awaiting payment', 'bills'],
@@ -460,8 +460,8 @@ function renderDashboard(data) {
       <div class="dashboard-mark"><span>Oracle snapshot · refresh to update</span><button class="button button-secondary button-small" type="button" data-action="refresh">Refresh dashboard</button></div>
     </div>
     <section class="summary-grid" aria-label="Priority queues and room capacity">
-      ${cards.map(([label, value, icon, note, view]) => `
-        <button class="summary-card summary-card-link" type="button" data-action="navigate" data-view="${escapeHtml(view)}" aria-label="Open ${escapeHtml(label.toLowerCase())}">
+      ${cards.map(([label, value, icon, note, view, mode]) => `
+        <button class="summary-card summary-card-link" type="button" data-action="${mode === 'queue' ? 'open-appointment-queue' : 'navigate'}" data-view="${escapeHtml(view)}" aria-label="Open ${escapeHtml(label.toLowerCase())}">
           <span class="summary-top"><span class="summary-label">${escapeHtml(label)}</span><span class="summary-icon" aria-hidden="true">${renderIcon(icon)}</span></span>
           <strong class="summary-value">${escapeHtml(value ?? '—')}</strong><span class="summary-note">${escapeHtml(note)}</span>
         </button>`).join('')}
@@ -529,6 +529,7 @@ async function loadModule() {
     const options = await loadOptions();
     if (state.view !== view) return;
     mainContent.innerHTML = moduleShell(config, options);
+    syncAppointmentControls();
     await refreshModuleRows();
   } catch (error) {
     if (state.view === view) renderLoadError(error, loadModule);
@@ -544,24 +545,45 @@ function moduleShell(config, options) {
       <div class="toolbar"><div class="toolbar-left">
         <label class="search-wrap"><span class="visually-hidden">Search ${escapeHtml(config.title)}</span><input type="search" id="moduleSearch" placeholder="Search ${escapeHtml(config.title.toLowerCase())}…" autocomplete="off"></label>
         ${config.filters.map((filter) => renderFilter(filter, options)).join('')}
-      </div><div class="toolbar-right">${config.endpoint === 'appointments' ? `<button class="button button-secondary button-small" type="button" data-action="toggle-appointment-view">${state.appointmentView === 'table' ? 'Agenda view' : 'Table view'}</button>` : ''}<button class="button button-secondary button-small" type="button" data-action="refresh">Refresh</button></div></div>
+        ${config.endpoint === 'appointments' ? `<label class="queue-date-control" id="queueDateControl"${state.appointmentView === 'queue' ? '' : ' hidden'}>Queue date<input class="control" type="date" id="queueDate" value="${escapeHtml(todayLocal())}" aria-label="Queue date"></label>` : ''}
+      </div><div class="toolbar-right">${config.endpoint === 'appointments' ? `<div class="appointment-view-switch" role="group" aria-label="Appointment views">
+        ${[['table', 'Table'], ['agenda', 'Agenda'], ['queue', 'Queue']].map(([mode, label]) => `<button class="button button-secondary button-small appointment-view-button" type="button" data-action="appointment-mode" data-mode="${mode}" aria-pressed="${state.appointmentView === mode}">${label}</button>`).join('')}
+      </div>` : ''}<button class="button button-secondary button-small" type="button" data-action="refresh">Refresh</button></div></div>
       <div id="moduleTable" aria-live="polite"><div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading…</div></div>
     </section>`;
 }
 
+function syncAppointmentControls() {
+  const isQueue = state.view === 'appointments' && state.appointmentView === 'queue';
+  document.querySelectorAll('[data-filter-wrap]').forEach((wrapper) => {
+    wrapper.hidden = isQueue && wrapper.dataset.filterWrap !== 'doctor_id';
+  });
+  const queueDate = document.getElementById('queueDateControl');
+  if (queueDate) queueDate.hidden = !isQueue;
+  document.querySelectorAll('[data-action="appointment-mode"]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.mode === state.appointmentView));
+  });
+}
+
 function renderFilter(filter, options) {
   const label = filter.label;
+  let control;
   if (filter.type === 'date') {
-    return `<label class="visually-hidden" for="filter-${escapeHtml(filter.key)}">${escapeHtml(label)}</label><input class="control module-filter" type="date" id="filter-${escapeHtml(filter.key)}" data-filter="${escapeHtml(filter.key)}" aria-label="${escapeHtml(label)}">`;
+    control = `<label class="visually-hidden" for="filter-${escapeHtml(filter.key)}">${escapeHtml(label)}</label><input class="control module-filter" type="date" id="filter-${escapeHtml(filter.key)}" data-filter="${escapeHtml(filter.key)}" aria-label="${escapeHtml(label)}">`;
+  } else {
+    const choices = filter.source ? (options[filter.source] || []).map((option) => ({ value: option.id, label: option.label })) : (filter.choices ? CHOICES[filter.choices] || filter.choices : []);
+    control = `<label class="visually-hidden" for="filter-${escapeHtml(filter.key)}">${escapeHtml(label)}</label><select class="control module-filter" id="filter-${escapeHtml(filter.key)}" data-filter="${escapeHtml(filter.key)}"><option value="">${escapeHtml(label)}</option>${choices.map((choice) => `<option value="${escapeHtml(choice.value)}">${escapeHtml(choice.label)}</option>`).join('')}</select>`;
   }
-  const choices = filter.source ? (options[filter.source] || []).map((option) => ({ value: option.id, label: option.label })) : (filter.choices ? CHOICES[filter.choices] || filter.choices : []);
-  return `<label class="visually-hidden" for="filter-${escapeHtml(filter.key)}">${escapeHtml(label)}</label><select class="control module-filter" id="filter-${escapeHtml(filter.key)}" data-filter="${escapeHtml(filter.key)}"><option value="">${escapeHtml(label)}</option>${choices.map((choice) => `<option value="${escapeHtml(choice.value)}">${escapeHtml(choice.label)}</option>`).join('')}</select>`;
+  return `<span class="module-filter-wrap" data-filter-wrap="${escapeHtml(filter.key)}">${control}</span>`;
 }
 
 async function refreshModuleRows() {
   const view = state.view;
   const config = MODULES[view];
   if (!config || !document.getElementById('moduleTable')) return;
+  if (view === 'appointments' && state.appointmentView === 'queue') {
+    return refreshAppointmentQueue();
+  }
   const requestId = ++state.moduleRequest;
   const container = document.getElementById('moduleTable');
   container.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading records…</div>';
@@ -587,6 +609,29 @@ async function refreshModuleRows() {
   } catch (error) {
     if (state.view !== view || requestId !== state.moduleRequest) return;
     container.innerHTML = `<div class="error-state"><strong>Records could not be loaded</strong><p>${escapeHtml(error.message)}</p><button class="button button-secondary button-small" type="button" data-action="refresh">Try again</button></div>`;
+  }
+}
+
+async function refreshAppointmentQueue() {
+  const requestId = ++state.moduleRequest;
+  const container = document.getElementById('moduleTable');
+  if (!container) return;
+  container.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading the selected appointment queue…</div>';
+  const params = new URLSearchParams();
+  params.set('date', document.getElementById('queueDate')?.value || todayLocal());
+  const doctorId = document.getElementById('filter-doctor_id')?.value;
+  if (doctorId) params.set('doctor_id', doctorId);
+  try {
+    const payload = await apiEnvelope(`/api/appointments/queue?${params.toString()}`);
+    if (state.view !== 'appointments' || state.appointmentView !== 'queue'
+      || requestId !== state.moduleRequest || !document.getElementById('moduleTable')) return;
+    state.queueData = payload.data || null;
+    state.rows = state.queueData?.rows || [];
+    state.pagination = null;
+    container.innerHTML = renderAppointmentQueue(state.queueData || {}, MODULES.appointments);
+  } catch (error) {
+    if (state.view !== 'appointments' || state.appointmentView !== 'queue' || requestId !== state.moduleRequest) return;
+    container.innerHTML = `<div class="error-state"><strong>Appointment queue could not be loaded</strong><p>${escapeHtml(error.message)}</p><button class="button button-secondary button-small" type="button" data-action="refresh">Try again</button></div>`;
   }
 }
 
@@ -627,7 +672,7 @@ function renderReportShell(options) {
       <div class="report-picker"><label for="reportSelect">Choose report</label><select class="control" id="reportSelect">${Object.entries(REPORTS).map(([key, report]) => `<option value="${escapeHtml(key)}"${key === state.reportId ? ' selected' : ''}>${escapeHtml(report.title)}</option>`).join('')}</select></div>
     </section>
     <section aria-label="Database reports"><div class="toolbar"><div class="toolbar-left" id="reportFilters">${config.filters.map((key) => renderReportFilter(key, options)).join('')}</div>
-      <div class="toolbar-right"><button class="button button-secondary button-small" type="button" data-action="refresh-report">Refresh report</button></div></div>
+      <div class="toolbar-right"><button class="button button-secondary button-small" type="button" data-action="export-report-csv">Export filtered CSV</button><button class="button button-secondary button-small" type="button" data-action="refresh-report">Refresh report</button></div></div>
       <div id="reportTable" aria-live="polite"><div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading report…</div></div>
     </section>`;
 }
@@ -652,6 +697,36 @@ async function refreshReportRows() {
   } catch (error) {
     if (state.view !== 'reports' || requestId !== state.reportRequest) return;
     container.innerHTML = `<div class="error-state"><strong>Report could not be loaded</strong><p>${escapeHtml(error.message)}</p><button class="button button-secondary button-small" type="button" data-action="refresh-report">Try again</button></div>`;
+  }
+}
+
+async function exportReportCsv() {
+  const params = new URLSearchParams();
+  document.querySelectorAll('.report-filter').forEach((control) => {
+    if (control.value) params.set(control.dataset.filter, control.value);
+  });
+  const endpoint = `/api/reports/${encodeURIComponent(state.reportId)}/csv?${params.toString()}`;
+  try {
+    const response = await fetch(endpoint, { headers: { Accept: 'text/csv, application/json' } });
+    if (!response.ok) {
+      let message = `CSV export failed (${response.status}).`;
+      try { message = (await response.json())?.error?.message || message; } catch (error) { /* Keep the safe fallback. */ }
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || `${state.reportId}.csv`;
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    toast(`Exported ${REPORTS[state.reportId].title} as CSV.`);
+  } catch (error) {
+    toast(error.message, 'error');
   }
 }
 
@@ -716,6 +791,39 @@ function renderAppointmentAgenda(rows, config) {
   return `<section class="agenda-list" aria-label="Appointment agenda">${cards}</section>`;
 }
 
+function renderAppointmentQueue(queue, config) {
+  const allRows = queue.rows || [];
+  const query = document.getElementById('moduleSearch')?.value.trim().toLocaleLowerCase() || '';
+  const rows = query ? allRows.filter((row) => [
+    row.patient_name, row.doctor_name, row.department_name, row.appointment_time,
+    row.status, row.appointment_id,
+  ].some((value) => String(value ?? '').toLocaleLowerCase().includes(query))) : allRows;
+  const counts = queue.counts || {};
+  const metrics = ['Scheduled', 'Checked In', 'Waiting', 'In Consultation', 'Completed', 'Cancelled', 'No-show'];
+  const next = queue.next_patient;
+  const table = rows.length ? tableRegion(`<table class="data-table"><thead><tr>
+      <th scope="col">Time</th><th scope="col">Patient</th><th scope="col">Doctor</th>
+      <th scope="col">Department</th><th scope="col">Status</th><th scope="col" class="actions-head">Actions</th>
+    </tr></thead><tbody>${rows.map((row) => `<tr>
+      <td>${escapeHtml(row.appointment_time)}</td><td><strong>${escapeHtml(row.patient_name)}</strong></td>
+      <td>${escapeHtml(row.doctor_name)}</td><td>${escapeHtml(row.department_name)}</td>
+      <td>${statusPill(row.status)}</td><td class="actions-head"><div class="row-actions">${renderRowActions('appointments', config, row)}</div></td>
+    </tr>`).join('')}</tbody></table>`, 'Appointment queue')
+    : `<div class="empty-state"><strong>${allRows.length ? 'No matching appointments' : 'No appointments for this queue'}</strong><span>${allRows.length ? 'Try a different patient, doctor, or status search.' : 'Choose another date or doctor, or book an appointment.'}</span></div>`;
+
+  return `<section class="appointment-queue" aria-label="Daily appointment queue">
+    <article class="queue-highlight" aria-live="polite"><div><span class="queue-eyebrow">Next to be seen · ${escapeHtml(formatDate(queue.date))}</span>
+      ${next ? `<h3>${escapeHtml(next.patient_name)}</h3><p>${escapeHtml(next.appointment_time)} · ${escapeHtml(next.doctor_name)} · ${escapeHtml(next.status)}</p>` : '<h3>No patient is waiting or scheduled next</h3><p>There are no waiting, checked-in, or scheduled visits for this date and doctor.</p>'}
+    </div><span class="queue-next-mark" aria-hidden="true">${next ? escapeHtml(next.appointment_time) : '—'}</span></article>
+    <p class="queue-order-note">Queue order is Waiting, then Checked In, then Scheduled; each group follows booked appointment time. Arrival order and triage priority are not recorded.</p>
+    <section class="queue-stat-grid" aria-label="Appointment counts by status">${metrics.map((status) => `<article class="queue-stat"><span>${escapeHtml(status)}</span><strong>${escapeHtml(counts[status] ?? 0)}</strong></article>`).join('')}</section>
+    <section class="queue-list" aria-label="Appointments for ${escapeHtml(formatDate(queue.date))}">
+      <div class="queue-list-heading"><h3>Appointments for ${escapeHtml(formatDate(queue.date))}</h3><span>${rows.length} shown${rows.length !== allRows.length ? ` · ${allRows.length} total` : ''}</span></div>
+      ${table}
+    </section>
+  </section>`;
+}
+
 function renderRowActions(view, config, row) {
   const id = row[primaryKey(view)];
   const safeId = escapeHtml(id);
@@ -733,9 +841,25 @@ function renderRowActions(view, config, row) {
     actions.push(`<button class="button button-secondary button-small" type="button" data-action="discharge" data-id="${safeId}" aria-label="Discharge ${accessibleRecordLabel}">Discharge</button>`);
   }
   if (view === 'medicines') actions.push(`<button class="button button-secondary button-small" type="button" data-action="stock" data-id="${safeId}" aria-label="Adjust stock for ${accessibleRecordLabel}">Adjust stock</button>`);
-  if (view === 'appointments' && row.status === 'Scheduled') {
-    actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="Completed" data-id="${safeId}" aria-label="Mark ${accessibleRecordLabel} completed">Complete</button>`);
-    actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="Cancelled" data-id="${safeId}" aria-label="Cancel ${accessibleRecordLabel}">Cancel</button>`);
+  if (view === 'appointments') {
+    const appointmentDay = String(row.appointment_date || '').slice(0, 10);
+    if (row.status === 'Scheduled') {
+      if (appointmentDay === todayLocal()) {
+        actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="Checked In" data-id="${safeId}" aria-label="Check in ${accessibleRecordLabel}">Check in</button>`);
+      } else if (appointmentDay && appointmentDay < todayLocal()) {
+        actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="No-show" data-id="${safeId}" aria-label="Mark ${accessibleRecordLabel} as no-show">Mark no-show</button>`);
+      }
+      actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="Cancelled" data-id="${safeId}" aria-label="Cancel ${accessibleRecordLabel}">Cancel</button>`);
+    } else {
+      const nextAction = {
+        'Checked In': ['Waiting', 'Add to waiting list'],
+        'Waiting': ['In Consultation', 'Start consultation'],
+        'In Consultation': ['Completed', 'Complete visit'],
+      }[row.status];
+      if (nextAction) {
+        actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="${escapeHtml(nextAction[0])}" data-id="${safeId}" aria-label="${escapeHtml(nextAction[1])} for ${accessibleRecordLabel}">${escapeHtml(nextAction[1])}</button>`);
+      }
+    }
   }
   if (!config.noEdit && (view !== 'appointments' || row.status === 'Scheduled')) {
     actions.push(`<button class="button button-secondary button-small" type="button" data-action="edit" data-id="${safeId}" aria-label="Edit ${accessibleRecordLabel}">Edit</button>`);
@@ -891,14 +1015,13 @@ async function openPatientHistory(patientId) {
       ['Date of birth', formatDate(patient.date_of_birth)], ['Gender', ({ M: 'Male', F: 'Female', O: 'Other' })[patient.gender] || patient.gender],
       ['Phone', patient.phone || '—'], ['Blood group', patient.blood_group || '—'], ['Address', patient.address || '—'],
     ];
-    const sections = [
-      ['Appointments', 'appointments', [{ key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'appointment_time', label: 'Time' }, { key: 'status', label: 'Status', format: 'status' }]],
-      ['Admissions', 'admissions', [{ key: 'room_number', label: 'Room' }, { key: 'admission_date', label: 'Admitted', format: 'date' }, { key: 'discharge_date', label: 'Discharged', format: 'date' }]],
-      ['Prescriptions', 'prescriptions', [{ key: 'medicine_name', label: 'Medicine' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'dosage', label: 'Dosage' }, { key: 'duration', label: 'Duration' }]],
-      ['Billing', 'bills', [{ key: 'bill_date', label: 'Date', format: 'date' }, { key: 'total_amount', label: 'Total', format: 'money' }, { key: 'payment_status', label: 'Payment', format: 'status' }]],
+    const timelineColumns = [
+      { key: 'date', label: 'Date', format: 'date' }, { key: 'time', label: 'Time' },
+      { key: 'type', label: 'Record', strong: true }, { key: 'details', label: 'Details' },
+      { key: 'status', label: 'Recorded status' },
     ];
-    const sectionHtml = sections.map(([title, key, columns]) => `<section class="detail-section"><div class="detail-section-header"><h3>${title}</h3><span class="field-hint">${(data[key] || []).length} records</span></div>${renderSimpleTable(data[key] || [], columns, `No ${title.toLowerCase()} on file.`)}</section>`).join('');
-    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="patientHistoryTitle"><header class="modal-header"><div><h2 id="patientHistoryTitle">Patient record</h2><p>Related clinical visits, admissions, prescriptions, and billing history.</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><article class="detail-card"><h3>${escapeHtml(patient.patient_name)}</h3><div class="detail-grid">${fields.map(([label, value]) => `<div class="detail-item"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join('')}</div></article>${sectionHtml}</div></section></div>`;
+    const timeline = data.timeline || [];
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide patient-chart-printable" role="dialog" aria-modal="true" aria-labelledby="patientHistoryTitle"><header class="modal-header"><div><h2 id="patientHistoryTitle">Patient record</h2><p>Administrative history assembled from the database records shown below.</p></div><div class="print-actions"><button class="button button-primary button-small" type="button" data-action="print-patient">Print patient record</button><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></div></header><div class="modal-body"><article class="detail-card"><h3>${escapeHtml(patient.patient_name)}</h3><div class="detail-grid">${fields.map(([label, value]) => `<div class="detail-item"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join('')}</div></article><p class="chart-disclaimer">This record contains appointments, admissions, prescription instructions, and bills only. Diagnosis notes, triage priority, and medication dispensing are not recorded here.</p><section class="detail-section patient-timeline"><div class="detail-section-header"><h3>Chronological record</h3><span class="field-hint">${timeline.length} events</span></div>${renderSimpleTable(timeline, timelineColumns, 'No appointment, admission, prescription, or billing history is on file.', 'Patient record timeline')}</section><footer class="modal-footer print-actions"><button class="button button-primary" type="button" data-action="print-patient">Print patient record</button><button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
     focusModal();
   } catch (error) {
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-label="Patient record"><header class="modal-header"><h2>Patient record</h2><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="error-state"><strong>History could not be loaded</strong><p>${escapeHtml(error.message)}</p></div></section></div>`;
@@ -934,7 +1057,7 @@ function openRecordDetails(view, recordId) {
       <section class="detail-section"><div class="detail-section-header"><h3>${escapeHtml(name[0].toUpperCase() + name.slice(1))}</h3><span class="field-hint">${rows.length} recent records</span></div>
       ${renderSimpleTable(rows, relatedColumns[name] || Object.keys(rows[0] || {}).slice(0, 5).map((key) => ({ key, label: key.replaceAll('_', ' ') })), `No related ${name} found.`)}</section>`).join('');
     const print = view === 'bills' ? '<button class="button button-primary" type="button" data-action="print-bill">Print bill</button>' : '';
-    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide bill-printable" role="dialog" aria-modal="true" aria-labelledby="recordDetailsTitle"><header class="modal-header"><div><h2 id="recordDetailsTitle">${escapeHtml(config.singular[0].toUpperCase() + config.singular.slice(1))} details</h2><p>Record values retrieved from the live API.</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header>
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide bill-printable" role="dialog" aria-modal="true" aria-labelledby="recordDetailsTitle"><header class="modal-header"><div><h2 id="recordDetailsTitle">${escapeHtml(config.singular[0].toUpperCase() + config.singular.slice(1))} details</h2><p>Record values returned by the database-backed API.</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header>
       <div class="modal-body"><article class="detail-card"><h3>${escapeHtml(record[config.columns[0].key] ?? `Record #${recordId}`)}</h3><div class="detail-grid">${fields}</div></article>${sections}<footer class="modal-footer">${print}<button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
     focusModal();
   }).catch((error) => {
@@ -947,7 +1070,7 @@ function openStockAdjustment(medicineId) {
   modalReturnFocus = document.activeElement;
   const medicine = state.rows.find((item) => String(item.medicine_id) === String(medicineId));
   if (!medicine) return;
-  modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="stockTitle"><header class="modal-header"><div><h2 id="stockTitle">Adjust medicine stock</h2><p>${escapeHtml(medicine.medicine_name)} · current balance ${escapeHtml(medicine.stock_quantity)}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="stockForm" data-id="${escapeHtml(medicineId)}"><div class="form-grid"><div class="form-field"><label for="stockChange">Quantity change</label><input class="form-control" id="stockChange" name="change" type="number" step="1" min="1" required placeholder="Enter units"></div><div class="form-field"><label for="stockDirection">Action</label><select class="form-control" id="stockDirection" name="stockDirection"><option value="add">Add stock</option><option value="remove">Remove / dispense stock</option></select></div><div class="form-field full-width"><small class="field-hint">Adjustments are atomic; Oracle prevents a balance below zero. Prescription creation alone never changes stock.</small></div></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button><button class="button button-primary" type="submit">Save adjustment</button></footer></form></div></section></div>`;
+  modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="stockTitle"><header class="modal-header"><div><h2 id="stockTitle">Adjust medicine stock</h2><p>${escapeHtml(medicine.medicine_name)} · current balance ${escapeHtml(medicine.stock_quantity)}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="stockForm" data-id="${escapeHtml(medicineId)}"><div class="form-grid"><div class="form-field"><label for="stockChange">Quantity change</label><input class="form-control" id="stockChange" name="change" type="number" step="1" min="1" required placeholder="Enter units"></div><div class="form-field"><label for="stockDirection">Action</label><select class="form-control" id="stockDirection" name="stockDirection"><option value="add">Add stock</option><option value="remove">Remove stock</option></select></div><div class="form-field full-width"><small class="field-hint">Adjustments are atomic; Oracle prevents a balance below zero. This adjustment is not a dispensing record, and prescription creation never changes stock.</small></div></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button><button class="button button-primary" type="submit">Save adjustment</button></footer></form></div></section></div>`;
   document.getElementById('stockChange').focus();
 }
 
@@ -1060,11 +1183,26 @@ async function submitRecordForm(form) {
 }
 
 async function changeAppointmentStatus(id, status) {
-  const prompt = status === 'Completed' ? 'Mark this scheduled appointment as completed?' : 'Cancel this scheduled appointment? The slot will be released for reuse.';
-  if (!window.confirm(prompt)) return;
+  const prompts = {
+    'Checked In': 'Check this patient in for today’s appointment?',
+    Waiting: 'Move this patient to the waiting queue?',
+    'In Consultation': 'Start the consultation for this patient?',
+    Completed: 'Mark the in-consultation visit as completed?',
+    Cancelled: 'Cancel this scheduled appointment? The slot will be released for reuse.',
+    'No-show': 'Mark this past appointment as No-show? Its slot will be released.',
+  };
+  if (!window.confirm(prompts[status] || `Change appointment status to ${status}?`)) return;
   try {
     await apiRequest(`/api/appointments/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
-    toast(status === 'Completed' ? 'Appointment marked completed.' : 'Appointment cancelled; its slot is available.');
+    const messages = {
+      'Checked In': 'Patient checked in.',
+      Waiting: 'Patient added to the waiting queue.',
+      'In Consultation': 'Consultation started.',
+      Completed: 'Visit marked completed; its slot is available.',
+      Cancelled: 'Appointment cancelled; its slot is available.',
+      'No-show': 'Appointment marked No-show; its slot is available.',
+    };
+    toast(messages[status] || 'Appointment status updated.');
     state.page = 1;
     await refreshModuleRows();
     focusRenderedRows();
@@ -1184,11 +1322,17 @@ document.addEventListener('click', async (event) => {
   } else if (action === 'refresh-report') {
     state.reportPage = 1;
     refreshReportRows();
-  } else if (action === 'toggle-appointment-view') {
-    state.appointmentView = state.appointmentView === 'table' ? 'agenda' : 'table';
-    target.textContent = state.appointmentView === 'table' ? 'Agenda view' : 'Table view';
-    const container = document.getElementById('moduleTable');
-    if (container) container.innerHTML = renderModuleTable(state.rows, MODULES.appointments);
+  } else if (action === 'export-report-csv') {
+    exportReportCsv();
+  } else if (action === 'open-appointment-queue') {
+    state.appointmentView = 'queue';
+    navigate('appointments');
+  } else if (action === 'appointment-mode') {
+    state.appointmentView = target.dataset.mode;
+    state.page = 1;
+    syncAppointmentControls();
+    await refreshModuleRows();
+    if (state.appointmentView !== 'queue') focusRenderedRows();
   } else if (action === 'page') {
     const page = Number(target.dataset.page);
     if (target.dataset.context === 'report') {
@@ -1204,7 +1348,7 @@ document.addEventListener('click', async (event) => {
     changeAppointmentStatus(target.dataset.id, target.dataset.status);
   } else if (action === 'view-record') {
     openRecordDetails(target.dataset.view, target.dataset.id);
-  } else if (action === 'print-bill') {
+  } else if (action === 'print-bill' || action === 'print-patient') {
     window.print();
   } else if (action === 'sort') {
     const sort = target.dataset.sort;
@@ -1280,6 +1424,9 @@ document.addEventListener('change', async (event) => {
     const options = await loadOptions();
     document.getElementById('reportFilters').innerHTML = config.filters.map((key) => renderReportFilter(key, options)).join('');
     refreshReportRows();
+  } else if (event.target.id === 'queueDate') {
+    state.page = 1;
+    refreshModuleRows();
   } else if (event.target.classList.contains('module-filter')) {
     state.page = 1;
     refreshModuleRows();

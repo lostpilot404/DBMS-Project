@@ -221,6 +221,13 @@ class OracleIntegrationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         return response.get_json()["data"]["availability_status"]
 
+    def _oracle_today(self) -> date:
+        with self.database.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT TRUNC(SYSDATE) FROM dual")
+                value = cursor.fetchone()[0]
+        return value.date() if hasattr(value, "date") else value
+
     def test_schema_metadata_and_workflow_triggers_are_valid(self):
         with self.database.connection() as connection:
             with connection.cursor() as cursor:
@@ -305,6 +312,17 @@ class OracleIntegrationTests(unittest.TestCase):
                 "appointment_date": date.today() - timedelta(days=1),
             },
         )
+        self._assert_oracle_error(
+            20023,
+            "INSERT INTO Appointment "
+            "(patient_id, doctor_id, appointment_date, appointment_time, status) "
+            "VALUES (:patient_id, :doctor_id, :appointment_date, '12:30', 'Completed')",
+            {
+                "patient_id": self.patient_id,
+                "doctor_id": self.doctor_id,
+                "appointment_date": date.today() + timedelta(days=4),
+            },
+        )
 
         # The sum of three NUMBER(10,2) charge columns requires NUMBER(11,2).
         response = self.client.post("/api/bills", json={
@@ -366,6 +384,80 @@ class OracleIntegrationTests(unittest.TestCase):
 
         released = self.client.post("/api/appointments", json={**slot, "patient_id": second_patient_id})
         self.assertEqual(released.status_code, 201, released.get_json())
+
+    def test_appointment_queue_lifecycle_and_slot_reservation(self):
+        oracle_today = self._oracle_today()
+        scheduled = self.client.post("/api/appointments", json={
+            "patient_id": self.patient_id,
+            "doctor_id": self.doctor_id,
+            "appointment_date": oracle_today.isoformat(),
+            "appointment_time": "12:20",
+            "status": "Scheduled",
+        })
+        self.assertEqual(scheduled.status_code, 201, scheduled.get_json())
+        appointment_id = scheduled.get_json()["data"]["id"]
+
+        queue = self.client.get("/api/appointments/queue", query_string={
+            "date": oracle_today.isoformat(), "doctor_id": self.doctor_id,
+        })
+        self.assertEqual(queue.status_code, 200, queue.get_json())
+        queue_rows = queue.get_json()["data"]["rows"]
+        self.assertTrue(any(row["appointment_id"] == appointment_id for row in queue_rows))
+        self.assertEqual(queue.get_json()["data"]["counts"]["Scheduled"], 1)
+        self.assertEqual(queue.get_json()["data"]["next_patient"]["appointment_id"], appointment_id)
+
+        # The database refuses a lifecycle shortcut, and an in-progress visit
+        # continues to reserve both the doctor and patient slot.
+        self._assert_oracle_error(
+            20024,
+            "UPDATE Appointment SET status = 'Completed' WHERE appointment_id = :id",
+            {"id": appointment_id},
+        )
+        second_patient_id = self._create_patient("B")
+        duplicate = self.client.post("/api/appointments", json={
+            "patient_id": second_patient_id,
+            "doctor_id": self.doctor_id,
+            "appointment_date": oracle_today.isoformat(),
+            "appointment_time": "12:20",
+            "status": "Scheduled",
+        })
+        self.assertEqual(duplicate.status_code, 409, duplicate.get_json())
+
+        for status in ("Checked In", "Waiting", "In Consultation", "Completed"):
+            response = self.client.put(f"/api/appointments/{appointment_id}", json={"status": status})
+            self.assertEqual(response.status_code, 200, response.get_json())
+
+        # A terminal appointment releases its slot; no appointment row is deleted.
+        reused = self.client.post("/api/appointments", json={
+            "patient_id": self.patient_id,
+            "doctor_id": self.doctor_id,
+            "appointment_date": oracle_today.isoformat(),
+            "appointment_time": "12:20",
+            "status": "Scheduled",
+        })
+        self.assertEqual(reused.status_code, 201, reused.get_json())
+        retained = self.client.delete(f"/api/appointments/{appointment_id}")
+        self.assertEqual(retained.status_code, 409, retained.get_json())
+
+        future = self.client.post("/api/appointments", json={
+            "patient_id": second_patient_id,
+            "doctor_id": self.doctor_id,
+            "appointment_date": (oracle_today + timedelta(days=2)).isoformat(),
+            "appointment_time": "16:20",
+            "status": "Scheduled",
+        })
+        self.assertEqual(future.status_code, 201, future.get_json())
+        future_id = future.get_json()["data"]["id"]
+        self._assert_oracle_error(
+            20025,
+            "UPDATE Appointment SET status = 'Checked In' WHERE appointment_id = :id",
+            {"id": future_id},
+        )
+        self._assert_oracle_error(
+            20026,
+            "UPDATE Appointment SET status = 'No-show' WHERE appointment_id = :id",
+            {"id": future_id},
+        )
 
     def test_admission_triggers_room_move_discharge_and_guards(self):
         second_patient_id = self._create_patient("B")

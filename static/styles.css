@@ -148,7 +148,14 @@ a { color: inherit; }
 
 .toolbar { display: flex; gap: var(--space-2); align-items: center; justify-content: space-between; margin: var(--space-3) 0; }
 .toolbar-left, .toolbar-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.module-filter-wrap { display: inline-flex; }
+.module-filter-wrap[hidden], .queue-date-control[hidden] { display: none; }
 .search-wrap { min-width: 210px; }
+.appointment-view-switch { display: inline-flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-control); background: #f4f7f9; }
+.appointment-view-switch .appointment-view-button { min-height: 28px; padding: 4px 8px; }
+.appointment-view-switch .appointment-view-button[aria-pressed="true"] { border-color: var(--navy); color: #fff; background: var(--navy); }
+.queue-date-control { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: var(--type-caption); font-weight: 700; }
+.queue-date-control .control { min-width: 145px; }
 .search-wrap input { width: 100%; }
 .control, .search-wrap input { min-height: 35px; padding: 7px 10px; border: 1px solid var(--control-border); border-radius: var(--radius-control); outline: none; color: #385268; background: white; font-size: var(--type-caption); }
 .control:focus-visible, .search-wrap input:focus-visible, .form-control:focus-visible { border-color: var(--focus); outline: 3px solid var(--focus); outline-offset: 2px; box-shadow: none; }
@@ -170,7 +177,9 @@ a { color: inherit; }
 .status-pill::before { width: 5px; height: 5px; border-radius: 50%; background: currentColor; content: ''; }
 .status-scheduled, .status-available, .status-paid, .status-completed { color: #13775e; background: #e7f6ef; }
 .status-pending, .status-occupied { color: var(--warning-ink); background: #fff5dc; }
-.status-cancelled, .status-maintenance { color: #a54e4e; background: #fff0ef; }
+.status-cancelled, .status-maintenance, .status-no-show { color: #a54e4e; background: #fff0ef; }
+.status-checked-in, .status-waiting { color: #146e66; background: #e8f7f3; }
+.status-in-consultation { color: #315e86; background: #edf4fb; }
 .empty-state, .error-state, .loading-state { display: grid; min-height: 180px; place-items: center; align-content: center; gap: 9px; padding: 24px; color: var(--muted); font-size: var(--type-ui); text-align: center; }
 .empty-state strong, .error-state strong { color: #385268; font-size: var(--type-ui); }
 .empty-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 50%; color: var(--teal-strong); background: var(--teal-light); font-size: 19px; }
@@ -318,7 +327,28 @@ textarea.form-control { min-height: 75px; resize: vertical; }
 .agenda-event-copy strong { color: #385268; font-size: var(--type-caption); overflow-wrap: anywhere; }
 .agenda-event-copy span { color: var(--muted); font-size: var(--type-caption); overflow-wrap: anywhere; }
 .agenda-event .row-actions { justify-content: flex-start; }
+.appointment-queue { display: grid; gap: 12px; }
+.queue-highlight { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 18px; border: 1px solid #cfe6df; border-radius: var(--radius-surface); background: #f2faf7; }
+.queue-highlight h3 { margin: 5px 0 3px; color: var(--navy-dark); font: 700 17px var(--font-sans); }
+.queue-highlight p { margin: 0; color: var(--muted); font-size: var(--type-caption); }
+.queue-eyebrow { color: var(--teal-strong); font-size: var(--type-caption); font-weight: 700; }
+.queue-next-mark { flex: 0 0 auto; color: var(--teal-strong); font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.queue-order-note { margin: 0; color: var(--muted); font-size: var(--type-caption); line-height: 1.5; }
+.queue-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.queue-stat { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-compact); background: white; }
+.queue-stat span { color: var(--muted); font-size: var(--type-caption); }
+.queue-stat strong { color: var(--navy-dark); font-size: var(--type-body); font-variant-numeric: tabular-nums; }
+.queue-list { min-width: 0; }
+.queue-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 4px 0 8px; }
+.queue-list-heading h3 { margin: 0; color: var(--navy-dark); font: 700 14px var(--font-sans); }
+.queue-list-heading span { color: var(--muted); font-size: var(--type-caption); }
+.queue-list .row-actions { justify-content: flex-start; flex-wrap: wrap; white-space: normal; }
+.chart-disclaimer { margin: 0 0 14px; color: var(--muted); font-size: var(--type-caption); line-height: 1.55; }
+.patient-timeline .table-wrap { max-height: none; }
 @media (max-width: 700px) {
+  .queue-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .queue-highlight { align-items: flex-start; padding: 13px; }
+  .queue-next-mark { font-size: 16px; }
   .table-scroll-hint { display: block; margin: 0 0 4px; color: var(--muted); font-size: var(--type-caption); }
   .report-picker { width: 100%; min-width: 0; }
   .pagination-footer { align-items: flex-start; flex-direction: column; }
@@ -331,10 +361,18 @@ textarea.form-control { min-height: 75px; resize: vertical; }
   .agenda-event .row-actions { grid-column: 1 / -1; flex-wrap: wrap; white-space: normal; }
 }
 @media print {
+  @page { margin: 12mm; }
   body * { visibility: hidden !important; }
   #modalRoot, #modalRoot * { visibility: visible !important; }
   #modalRoot .modal-backdrop { position: static; display: block; padding: 0; background: #fff; backdrop-filter: none; }
   #modalRoot .modal-card { width: 100%; max-height: none; overflow: visible; border: 0; box-shadow: none; }
-  #modalRoot .modal-header button, #modalRoot .modal-footer { display: none !important; }
+  #modalRoot .modal-header { position: static; }
+  #modalRoot .modal-header button, #modalRoot .modal-footer, #modalRoot .print-actions { display: none !important; }
   #modalRoot .modal-body { padding: 10px 0; overflow: visible; }
+  #modalRoot .patient-chart-printable .table-wrap { max-height: none; overflow: visible; border-color: #aab5bd; }
+  #modalRoot .patient-chart-printable .data-table { width: 100%; min-width: 0; table-layout: auto; }
+  #modalRoot .patient-chart-printable .data-table th,
+  #modalRoot .patient-chart-printable .data-table td { padding: 5px 6px; font-size: 9pt; }
+  #modalRoot .patient-chart-printable .data-table tr { break-inside: avoid; page-break-inside: avoid; }
+  #modalRoot .patient-chart-printable .detail-card { background: #fff; }
 }

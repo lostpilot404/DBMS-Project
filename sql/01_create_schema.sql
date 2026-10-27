@@ -49,21 +49,24 @@ CREATE TABLE Appointment (
     appointment_date DATE NOT NULL,
     appointment_time VARCHAR2(5) NOT NULL,
     status           VARCHAR2(20) DEFAULT 'Scheduled' NOT NULL,
-    -- Scheduled bookings reserve a slot; cancelled/completed records remain history.
+    -- Scheduled, checked-in, waiting, and in-consultation visits reserve a slot.
+    -- Completed, cancelled, and no-show appointments remain history and release it.
     active_doctor_id NUMBER(10) GENERATED ALWAYS AS
-        (CASE WHEN status = 'Scheduled' THEN doctor_id END) VIRTUAL,
+        (CASE WHEN status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation') THEN doctor_id END) VIRTUAL,
     active_patient_id NUMBER(10) GENERATED ALWAYS AS
-        (CASE WHEN status = 'Scheduled' THEN patient_id END) VIRTUAL,
+        (CASE WHEN status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation') THEN patient_id END) VIRTUAL,
     active_slot_date DATE GENERATED ALWAYS AS
-        (CASE WHEN status = 'Scheduled' THEN appointment_date END) VIRTUAL,
+        (CASE WHEN status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation') THEN appointment_date END) VIRTUAL,
     active_slot_time VARCHAR2(5) GENERATED ALWAYS AS
-        (CASE WHEN status = 'Scheduled' THEN appointment_time END) VIRTUAL,
+        (CASE WHEN status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation') THEN appointment_time END) VIRTUAL,
     CONSTRAINT pk_appointment PRIMARY KEY (appointment_id),
     CONSTRAINT fk_appointment_patient FOREIGN KEY (patient_id)
         REFERENCES Patient (patient_id),
     CONSTRAINT fk_appointment_doctor FOREIGN KEY (doctor_id)
         REFERENCES Doctor (doctor_id),
-    CONSTRAINT ck_appointment_status CHECK (status IN ('Scheduled', 'Completed', 'Cancelled')),
+    CONSTRAINT ck_appointment_status CHECK
+        (status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation',
+                    'Completed', 'Cancelled', 'No-show')),
     CONSTRAINT ck_appointment_day CHECK (appointment_date = TRUNC(appointment_date)),
     CONSTRAINT ck_appointment_time CHECK
         (REGEXP_LIKE(appointment_time, '^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$')),
@@ -73,24 +76,62 @@ CREATE TABLE Appointment (
         (active_patient_id, active_slot_date, active_slot_time)
 );
 
--- Enforce appointment date/status rules at the database boundary. Only active
--- scheduled rows can be rescheduled or transitioned; terminal rows remain history.
+-- Enforce appointment lifecycle, check-in/no-show timing, and booking immutability
+-- at the database boundary. The API applies the same transitions for clearer feedback.
 CREATE OR REPLACE TRIGGER trg_appointment_guard
 BEFORE INSERT OR UPDATE ON Appointment
 FOR EACH ROW
 BEGIN
-    IF :NEW.status = 'Scheduled'
-       AND TRUNC(:NEW.appointment_date) < TRUNC(SYSDATE) THEN
-        RAISE_APPLICATION_ERROR(-20022, 'A scheduled appointment cannot be in the past.');
+    IF INSERTING THEN
+        IF :NEW.status <> 'Scheduled' THEN
+            RAISE_APPLICATION_ERROR(-20023, 'A new appointment must start as Scheduled.');
+        END IF;
+        IF TRUNC(:NEW.appointment_date) < TRUNC(SYSDATE) THEN
+            RAISE_APPLICATION_ERROR(-20022, 'A scheduled appointment cannot be in the past.');
+        END IF;
     END IF;
 
-    IF UPDATING AND :OLD.status IN ('Completed', 'Cancelled') THEN
+    IF UPDATING THEN
+        IF :OLD.status IN ('Completed', 'Cancelled', 'No-show') THEN
+            IF :NEW.status <> :OLD.status
+               OR :NEW.patient_id <> :OLD.patient_id
+               OR :NEW.doctor_id <> :OLD.doctor_id
+               OR :NEW.appointment_date <> :OLD.appointment_date
+               OR :NEW.appointment_time <> :OLD.appointment_time THEN
+                RAISE_APPLICATION_ERROR(-20020, 'Terminal appointment records are read-only history.');
+            END IF;
+        END IF;
+
+        IF :OLD.status <> 'Scheduled'
+           AND (:NEW.patient_id <> :OLD.patient_id
+                OR :NEW.doctor_id <> :OLD.doctor_id
+                OR :NEW.appointment_date <> :OLD.appointment_date
+                OR :NEW.appointment_time <> :OLD.appointment_time) THEN
+            RAISE_APPLICATION_ERROR(-20024, 'Only a scheduled appointment can be rescheduled.');
+        END IF;
+
         IF :NEW.status <> :OLD.status
-           OR :NEW.patient_id <> :OLD.patient_id
-           OR :NEW.doctor_id <> :OLD.doctor_id
-           OR :NEW.appointment_date <> :OLD.appointment_date
-           OR :NEW.appointment_time <> :OLD.appointment_time THEN
-            RAISE_APPLICATION_ERROR(-20020, 'Completed and cancelled appointments are read-only history.');
+           AND NOT (
+               (:OLD.status = 'Scheduled'
+                    AND :NEW.status IN ('Checked In', 'Cancelled', 'No-show'))
+               OR (:OLD.status = 'Checked In' AND :NEW.status = 'Waiting')
+               OR (:OLD.status = 'Waiting' AND :NEW.status = 'In Consultation')
+               OR (:OLD.status = 'In Consultation' AND :NEW.status = 'Completed')
+           ) THEN
+            RAISE_APPLICATION_ERROR(-20024, 'The requested appointment status transition is not allowed.');
+        END IF;
+
+        IF :NEW.status = 'Scheduled'
+           AND TRUNC(:NEW.appointment_date) < TRUNC(SYSDATE) THEN
+            RAISE_APPLICATION_ERROR(-20022, 'A scheduled appointment cannot be in the past.');
+        END IF;
+        IF :OLD.status = 'Scheduled' AND :NEW.status = 'Checked In'
+           AND TRUNC(:NEW.appointment_date) <> TRUNC(SYSDATE) THEN
+            RAISE_APPLICATION_ERROR(-20025, 'An appointment can be checked in only on its scheduled date.');
+        END IF;
+        IF :OLD.status = 'Scheduled' AND :NEW.status = 'No-show'
+           AND TRUNC(:NEW.appointment_date) >= TRUNC(SYSDATE) THEN
+            RAISE_APPLICATION_ERROR(-20026, 'An appointment can be marked No-show only after its date has passed.');
         END IF;
     END IF;
 END;

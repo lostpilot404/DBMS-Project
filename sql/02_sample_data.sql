@@ -104,7 +104,8 @@ INSERT INTO Medicine (medicine_name, manufacturer, price, stock_quantity)
 SELECT 'Vitamin D3 1000 IU', 'Hillview Healthcare', 4.00, 0 FROM dual
  WHERE NOT EXISTS (SELECT 1 FROM Medicine WHERE medicine_name = 'Vitamin D3 1000 IU');
 
--- Appointments: two upcoming, one completed, and one cancelled example.
+-- Appointments: two upcoming visits, one completed through the valid lifecycle,
+-- and one cancelled example. Active-slot checks include every in-progress status.
 INSERT INTO Appointment (patient_id, doctor_id, appointment_date, appointment_time, status)
 SELECT p.patient_id, d.doctor_id, TRUNC(SYSDATE) + 1, '09:00', 'Scheduled'
   FROM Patient p CROSS JOIN Doctor d
@@ -113,12 +114,11 @@ SELECT p.patient_id, d.doctor_id, TRUNC(SYSDATE) + 1, '09:00', 'Scheduled'
                     WHERE a.doctor_id = d.doctor_id
                       AND a.appointment_date = TRUNC(SYSDATE) + 1
                       AND a.appointment_time = '09:00'
-                      AND a.status = 'Scheduled')
+                      AND a.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation'))
    AND NOT EXISTS (SELECT 1 FROM Appointment a
                     WHERE a.patient_id = p.patient_id
                       AND a.appointment_date = TRUNC(SYSDATE) + 1
-                      AND a.appointment_time = '09:00'
-                      AND a.status = 'Scheduled');
+                      AND a.appointment_time = '09:00');
 INSERT INTO Appointment (patient_id, doctor_id, appointment_date, appointment_time, status)
 SELECT p.patient_id, d.doctor_id, TRUNC(SYSDATE) + 2, '10:30', 'Scheduled'
   FROM Patient p CROSS JOIN Doctor d
@@ -127,28 +127,77 @@ SELECT p.patient_id, d.doctor_id, TRUNC(SYSDATE) + 2, '10:30', 'Scheduled'
                     WHERE a.doctor_id = d.doctor_id
                       AND a.appointment_date = TRUNC(SYSDATE) + 2
                       AND a.appointment_time = '10:30'
-                      AND a.status = 'Scheduled')
+                      AND a.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation'))
    AND NOT EXISTS (SELECT 1 FROM Appointment a
                     WHERE a.patient_id = p.patient_id
                       AND a.appointment_date = TRUNC(SYSDATE) + 2
-                      AND a.appointment_time = '10:30'
-                      AND a.status = 'Scheduled');
-INSERT INTO Appointment (patient_id, doctor_id, appointment_date, appointment_time, status)
-SELECT p.patient_id, d.doctor_id, TRUNC(SYSDATE) - 2, '11:00', 'Completed'
-  FROM Patient p CROSS JOIN Doctor d
- WHERE p.phone = '+91-90001-20003' AND d.email = 'arjun.nair@example.test'
-   AND NOT EXISTS (SELECT 1 FROM Appointment a
-                    WHERE a.patient_id = p.patient_id
-                      AND a.appointment_date = TRUNC(SYSDATE) - 2
-                      AND a.appointment_time = '11:00');
-INSERT INTO Appointment (patient_id, doctor_id, appointment_date, appointment_time, status)
-SELECT p.patient_id, d.doctor_id, TRUNC(SYSDATE) + 4, '14:00', 'Cancelled'
-  FROM Patient p CROSS JOIN Doctor d
- WHERE p.phone = '+91-90001-20004' AND d.email = 'rohan.das@example.test'
-   AND NOT EXISTS (SELECT 1 FROM Appointment a
-                    WHERE a.patient_id = p.patient_id
-                      AND a.appointment_date = TRUNC(SYSDATE) + 4
-                      AND a.appointment_time = '14:00');
+                      AND a.appointment_time = '10:30');
+
+-- Seed a completed history through the valid lifecycle. The block first checks
+-- for an existing patient slot, then updates only the identity it just inserted.
+-- A rerun or a user-created matching appointment is left untouched.
+DECLARE
+    v_patient_id Patient.patient_id%TYPE;
+    v_doctor_id Doctor.doctor_id%TYPE;
+    v_appointment_id Appointment.appointment_id%TYPE;
+BEGIN
+    SELECT p.patient_id, d.doctor_id
+      INTO v_patient_id, v_doctor_id
+      FROM Patient p CROSS JOIN Doctor d
+     WHERE p.phone = '+91-90001-20003'
+       AND d.email = 'arjun.nair@example.test'
+       AND NOT EXISTS (SELECT 1 FROM Appointment a
+                        WHERE a.patient_id = p.patient_id
+                          AND a.appointment_date = TRUNC(SYSDATE)
+                          AND a.appointment_time = '11:00')
+       AND NOT EXISTS (SELECT 1 FROM Appointment a
+                        WHERE a.doctor_id = d.doctor_id
+                          AND a.appointment_date = TRUNC(SYSDATE)
+                          AND a.appointment_time = '11:00'
+                          AND a.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation'));
+
+    INSERT INTO Appointment (patient_id, doctor_id, appointment_date, appointment_time, status)
+    VALUES (v_patient_id, v_doctor_id, TRUNC(SYSDATE), '11:00', 'Scheduled')
+    RETURNING appointment_id INTO v_appointment_id;
+    UPDATE Appointment SET status = 'Checked In' WHERE appointment_id = v_appointment_id;
+    UPDATE Appointment SET status = 'Waiting' WHERE appointment_id = v_appointment_id;
+    UPDATE Appointment SET status = 'In Consultation' WHERE appointment_id = v_appointment_id;
+    UPDATE Appointment SET status = 'Completed' WHERE appointment_id = v_appointment_id;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN NULL;
+END;
+/
+
+-- Seed a cancelled history through a valid Scheduled -> Cancelled transition;
+-- only the newly inserted row is updated, never a pre-existing appointment.
+DECLARE
+    v_patient_id Patient.patient_id%TYPE;
+    v_doctor_id Doctor.doctor_id%TYPE;
+    v_appointment_id Appointment.appointment_id%TYPE;
+BEGIN
+    SELECT p.patient_id, d.doctor_id
+      INTO v_patient_id, v_doctor_id
+      FROM Patient p CROSS JOIN Doctor d
+     WHERE p.phone = '+91-90001-20004'
+       AND d.email = 'rohan.das@example.test'
+       AND NOT EXISTS (SELECT 1 FROM Appointment a
+                        WHERE a.patient_id = p.patient_id
+                          AND a.appointment_date = TRUNC(SYSDATE) + 4
+                          AND a.appointment_time = '14:00')
+       AND NOT EXISTS (SELECT 1 FROM Appointment a
+                        WHERE a.doctor_id = d.doctor_id
+                          AND a.appointment_date = TRUNC(SYSDATE) + 4
+                          AND a.appointment_time = '14:00'
+                          AND a.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation'));
+
+    INSERT INTO Appointment (patient_id, doctor_id, appointment_date, appointment_time, status)
+    VALUES (v_patient_id, v_doctor_id, TRUNC(SYSDATE) + 4, '14:00', 'Scheduled')
+    RETURNING appointment_id INTO v_appointment_id;
+    UPDATE Appointment SET status = 'Cancelled' WHERE appointment_id = v_appointment_id;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN NULL;
+END;
+/
 
 -- One active admission (R-101 becomes Occupied through the trigger) and one past stay.
 INSERT INTO Admission (patient_id, room_id, admission_date)

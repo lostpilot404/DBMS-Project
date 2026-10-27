@@ -21,6 +21,8 @@ erDiagram
         VARCHAR2 address
         VARCHAR2 blood_group
     }
+    %% Lifecycle: Scheduled -> Checked In -> Waiting -> In Consultation -> Completed.
+    %% Cancelled and No-show are terminal states; only active visits reserve time slots.
     APPOINTMENT {
         NUMBER appointment_id PK
         NUMBER patient_id FK
