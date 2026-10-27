@@ -2,18 +2,36 @@
 'use strict';
 
 const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Dashboard', icon: '◫' },
-  { id: 'departments', label: 'Departments', icon: '▦' },
-  { id: 'doctors', label: 'Doctors', icon: '✚' },
-  { id: 'patients', label: 'Patients', icon: '◎' },
-  { id: 'appointments', label: 'Appointments', icon: '◷' },
-  { id: 'rooms', label: 'Rooms', icon: '▤' },
-  { id: 'admissions', label: 'Admissions', icon: '⇥' },
-  { id: 'medicines', label: 'Medicines', icon: '⌁' },
-  { id: 'prescriptions', label: 'Prescriptions', icon: '☷' },
-  { id: 'bills', label: 'Billing', icon: '₹' },
-  { id: 'reports', label: 'Reports', icon: '▥' },
+  { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+  { id: 'departments', label: 'Departments', icon: 'departments' },
+  { id: 'doctors', label: 'Doctors', icon: 'doctors' },
+  { id: 'patients', label: 'Patients', icon: 'patients' },
+  { id: 'appointments', label: 'Appointments', icon: 'appointments' },
+  { id: 'rooms', label: 'Rooms', icon: 'rooms' },
+  { id: 'admissions', label: 'Admissions', icon: 'admissions' },
+  { id: 'medicines', label: 'Medicines', icon: 'medicines' },
+  { id: 'prescriptions', label: 'Prescriptions', icon: 'prescriptions' },
+  { id: 'bills', label: 'Billing', icon: 'bills' },
+  { id: 'reports', label: 'Reports', icon: 'reports' },
 ];
+
+const ICON_PATHS = {
+  dashboard: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
+  departments: '<path d="M4 21h16M6 21V5l6-2 6 2v16M9 9h.01M15 9h.01M9 13h.01M15 13h.01M10 21v-4h4v4"/>',
+  doctors: '<circle cx="12" cy="7" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2M19 5v5M16.5 7.5h5"/>',
+  patients: '<circle cx="9" cy="8" r="3.25"/><path d="M2.5 20v-1.5a6.5 6.5 0 0 1 13 0V20M16 5.5a3.25 3.25 0 0 1 0 6.25M18 14a5 5 0 0 1 3.5 4.5V20"/>',
+  appointments: '<rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M7.5 3v4M16.5 3v4M3.5 9.5h17M8 13h3M8 17h3M15 13h2"/>',
+  rooms: '<path d="M3 5v16M21 12v9M3 17h18M6 13h5a4 4 0 0 1 4 4M7 9h4a2 2 0 0 1 2 2v2"/>',
+  admissions: '<path d="M13 4h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5M3 12h12M11 8l4 4-4 4"/>',
+  medicines: '<path d="M6.6 17.4a5 5 0 0 1 0-7.1l3.8-3.8a5 5 0 0 1 7.1 7.1l-3.8 3.8a5 5 0 0 1-7.1 0Z"/><path d="m9.2 8.2 6.6 6.6"/>',
+  prescriptions: '<rect x="4" y="4" width="16" height="18" rx="2"/><path d="M9 4.5h6M8 10h8M8 14h8M8 18h5"/>',
+  bills: '<path d="M5 3.5h14v17l-3-1.7-4 1.7-4-1.7-3 1.7zM9 8h6M9 12h6M9 16h3"/>',
+  reports: '<path d="M3.5 20.5h17M5.5 18V11h4v7M10.5 18V5h4v13M15.5 18V8h4v10"/>',
+};
+
+function renderIcon(name) {
+  return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ICON_PATHS.dashboard}</svg>`;
+}
 
 const CHOICES = {
   gender: [{ value: 'M', label: 'Male' }, { value: 'F', label: 'Female' }, { value: 'O', label: 'Other' }],
@@ -290,11 +308,43 @@ function setPageTitle(title) {
 function renderNavigation() {
   const nav = document.getElementById('primaryNav');
   nav.innerHTML = NAV_ITEMS.map((item) => `
-    <button class="nav-link${state.view === item.id ? ' active' : ''}" type="button"
+    <a class="nav-link${state.view === item.id ? ' active' : ''}" href="#${item.id}"
       data-action="navigate" data-view="${item.id}"${state.view === item.id ? ' aria-current="page"' : ''}>
-      <span class="nav-icon" aria-hidden="true">${escapeHtml(item.icon)}</span>
+      <span class="nav-icon" aria-hidden="true">${renderIcon(item.icon)}</span>
       <span>${escapeHtml(item.label)}</span>
-    </button>`).join('');
+    </a>`).join('');
+}
+
+function setMobileNavigation(open, { restoreFocus = true } = {}) {
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.querySelector('.menu-toggle');
+  const wasOpen = sidebar.classList.contains('open');
+  const isMobile = window.matchMedia('(max-width: 820px)').matches;
+  sidebar.classList.toggle('open', open);
+  sidebar.inert = isMobile && !open;
+  toggle.setAttribute('aria-expanded', String(open));
+  toggle.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+  const icon = toggle.querySelector('[aria-hidden="true"]');
+  if (icon) icon.textContent = open ? '×' : '☰';
+  if (open) {
+    (sidebar.querySelector('.nav-link.active') || sidebar.querySelector('.nav-link'))?.focus();
+  } else if (restoreFocus && wasOpen) {
+    toggle.focus();
+  }
+}
+
+function syncNavigationBreakpoint() {
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.querySelector('.menu-toggle');
+  const isMobile = window.matchMedia('(max-width: 820px)').matches;
+  if (!isMobile && sidebar.classList.contains('open')) {
+    setMobileNavigation(false, { restoreFocus: false });
+    return;
+  }
+  const focusMovesIntoDrawer = isMobile && !sidebar.classList.contains('open')
+    && sidebar.contains(document.activeElement);
+  sidebar.inert = isMobile && !sidebar.classList.contains('open');
+  if (focusMovesIntoDrawer) toggle.focus();
 }
 
 async function apiEnvelope(path, options = {}) {
@@ -347,6 +397,10 @@ async function loadOptions(force = false) {
 
 function navigate(view, updateHistory = true) {
   if (view !== 'dashboard' && view !== 'reports' && !MODULES[view]) return;
+  const primaryNav = document.getElementById('primaryNav');
+  const focusWasInNavigation = primaryNav.contains(document.activeElement);
+  const focusWasInMain = mainContent.contains(document.activeElement);
+  const navigationWasOpen = document.getElementById('sidebar').classList.contains('open');
   state.view = view;
   state.sort = null;
   state.direction = 'asc';
@@ -354,10 +408,11 @@ function navigate(view, updateHistory = true) {
   state.pagination = null;
   state.appointmentView = 'table';
   renderNavigation();
-  document.getElementById('sidebar').classList.remove('open');
-  document.querySelector('.menu-toggle').setAttribute('aria-expanded', 'false');
+  setMobileNavigation(false, { restoreFocus: false });
   const title = view === 'dashboard' ? 'Dashboard' : view === 'reports' ? 'Reports' : MODULES[view].title;
   setPageTitle(title);
+  if (navigationWasOpen || focusWasInMain) document.getElementById('pageTitle').focus();
+  else if (focusWasInNavigation) primaryNav.querySelector('.nav-link.active')?.focus();
   if (view === 'dashboard') loadDashboard();
   else if (view === 'reports') loadReports();
   else loadModule();
@@ -365,6 +420,7 @@ function navigate(view, updateHistory = true) {
 }
 
 async function loadDashboard() {
+  if (mainContent.contains(document.activeElement)) mainContent.focus();
   const requestId = ++state.dashboardRequest;
   mainContent.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading live Oracle summaries…</div>';
   try {
@@ -379,60 +435,62 @@ async function loadDashboard() {
 function renderDashboard(data) {
   const counts = data.counts || {};
   const cards = [
-    ['Patients', counts.patients, '◎', 'Registered records', 'patients'],
-    ['Doctors', counts.doctors, '✚', 'Assigned to departments', 'doctors'],
-    ['Departments', counts.departments, '▦', 'Clinical services', 'departments'],
-    ['Appointments', counts.appointments, '◷', 'All recorded visits', 'appointments'],
-    ['Upcoming appointments', counts.upcoming_appointments, '◷', 'Scheduled from today', 'appointments'],
-    ['Completed appointments', counts.completed_appointments, '✓', 'Visit history', 'appointments'],
-    ['Cancelled appointments', counts.cancelled_appointments, '×', 'Retained as history', 'appointments'],
-    ['Active admissions', counts.active_admissions, '⇥', 'Currently admitted', 'admissions'],
-    ['Available rooms', counts.available_rooms, '▤', 'Ready for admission', 'rooms'],
-    ['Occupied rooms', counts.occupied_rooms, '▤', 'Managed by admissions', 'rooms'],
-    ['Medicines', counts.total_medicines, '⌁', 'Catalogue records', 'medicines'],
-    ['Low-stock medicines', counts.low_stock_medicines, '!', 'Fewer than 10 units', 'medicines'],
-    ['Pending bills', counts.pending_bills, '₹', 'Awaiting payment', 'bills'],
-    ['Outstanding balance', formatMoney(data.outstanding_total), '₹', 'Bills marked Pending', 'bills'],
-    ['Collected payments', formatMoney(data.collected_total), '✓', 'Bills marked Paid; no gateway', 'bills'],
+    ['Upcoming appointments', counts.upcoming_appointments, 'appointments', 'Scheduled from today onward', 'appointments'],
+    ['Active admissions', counts.active_admissions, 'admissions', 'Patients currently admitted', 'admissions'],
+    ['Available rooms', counts.available_rooms, 'rooms', 'Ready for admission', 'rooms'],
+    ['Pending bills', counts.pending_bills, 'bills', 'Awaiting payment', 'bills'],
+  ];
+  const supportingTotals = [
+    ['Patients', counts.patients],
+    ['Doctors', counts.doctors],
+    ['Departments', counts.departments],
+    ['All appointments', counts.appointments],
+    ['Completed visits', counts.completed_appointments],
+    ['Cancelled visits', counts.cancelled_appointments],
+    ['Occupied rooms', counts.occupied_rooms],
+    ['Medicine catalogue', counts.total_medicines],
+    ['Low-stock medicines', counts.low_stock_medicines],
+    ['Outstanding balance', formatMoney(data.outstanding_total)],
+    ['Bills marked Paid', formatMoney(data.collected_total)],
   ];
   const recent = data.recent_records || [];
   mainContent.innerHTML = `
     <div class="dashboard-greeting">
-      <div><h2>Hospital overview</h2><p>Every total below is queried from the connected Oracle database.</p></div>
-      <span class="dashboard-mark">Live database summary</span>
+      <div><h2>Hospital overview</h2><p>Operational queues first; supporting register totals follow.</p></div>
+      <div class="dashboard-mark"><span>Oracle snapshot · refresh to update</span><button class="button button-secondary button-small" type="button" data-action="refresh">Refresh dashboard</button></div>
     </div>
-    <section class="summary-grid" aria-label="Hospital summary">
+    <section class="summary-grid" aria-label="Priority queues and room capacity">
       ${cards.map(([label, value, icon, note, view]) => `
-        <button class="summary-card summary-card-link" type="button" data-action="navigate" data-view="${escapeHtml(view)}" aria-label="Open ${escapeHtml(view)} records">
-          <span class="summary-top"><span class="summary-label">${escapeHtml(label)}</span><span class="summary-icon" aria-hidden="true">${escapeHtml(icon)}</span></span>
+        <button class="summary-card summary-card-link" type="button" data-action="navigate" data-view="${escapeHtml(view)}" aria-label="Open ${escapeHtml(label.toLowerCase())}">
+          <span class="summary-top"><span class="summary-label">${escapeHtml(label)}</span><span class="summary-icon" aria-hidden="true">${renderIcon(icon)}</span></span>
           <strong class="summary-value">${escapeHtml(value ?? '—')}</strong><span class="summary-note">${escapeHtml(note)}</span>
         </button>`).join('')}
     </section>
-    <section class="dashboard-panels">
+    <section class="dashboard-panels" aria-label="Operational work queues">
       <article class="panel">
         <header class="panel-header"><div><h2 class="panel-title">Upcoming appointments</h2><p class="panel-subtitle">Scheduled visits from today onwards</p></div><button class="panel-link" type="button" data-action="navigate" data-view="appointments">View appointments →</button></header>
         <div class="panel-body">${renderSimpleTable(data.upcoming_appointments || [], [
           { key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'appointment_time', label: 'Time' },
           { key: 'patient_name', label: 'Patient', strong: true }, { key: 'doctor_name', label: 'Doctor' },
           { key: 'status', label: 'Status', format: 'status' },
-        ], 'No upcoming appointments are scheduled.')}</div>
+        ], 'No upcoming appointments are scheduled.', 'Upcoming appointments')}</div>
       </article>
       <article class="panel">
         <header class="panel-header"><div><h2 class="panel-title">Outstanding bills</h2><p class="panel-subtitle">Pending · ${escapeHtml(formatMoney(data.outstanding_total))} total</p></div><button class="panel-link" type="button" data-action="navigate" data-view="bills">View billing →</button></header>
         <div class="panel-body">${renderSimpleTable(data.outstanding_bills || [], [
           { key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient', strong: true },
           { key: 'bill_date', label: 'Date', format: 'date' }, { key: 'total_amount', label: 'Amount', format: 'money' },
-        ], 'There are no outstanding bills.')}</div>
+        ], 'There are no outstanding bills.', 'Outstanding bills')}</div>
       </article>
       <article class="panel">
         <header class="panel-header"><div><h2 class="panel-title">Low-stock medicines</h2><p class="panel-subtitle">Less than ten units recorded</p></div><button class="panel-link" type="button" data-action="navigate" data-view="medicines">Manage inventory →</button></header>
         <div class="panel-body">${renderSimpleTable(data.low_stock_medicines || [], [
           { key: 'medicine_name', label: 'Medicine', strong: true }, { key: 'manufacturer', label: 'Manufacturer' },
           { key: 'stock_quantity', label: 'Stock', format: 'stock' },
-        ], 'No medicines are below the low-stock threshold.')}</div>
+        ], 'No medicines are below the low-stock threshold.', 'Low-stock medicines')}</div>
       </article>
       <article class="panel">
-        <header class="panel-header"><div><h2 class="panel-title">Recent records</h2><p class="panel-subtitle">Recent dated appointments, admissions, prescriptions, and bills</p></div><button class="panel-link" type="button" data-action="navigate" data-view="reports">Open reports →</button></header>
+        <header class="panel-header"><div><h2 class="panel-title">Recent records</h2><p class="panel-subtitle">Appointments, admissions, prescriptions, and bills</p></div><button class="panel-link" type="button" data-action="navigate" data-view="reports">Open reports →</button></header>
         <div class="panel-body">${recent.length ? `<div class="activity-list">${recent.map((item) => `
           <button class="activity-item" type="button" data-action="navigate" data-view="${escapeHtml(item.resource)}">
             <span class="activity-mark" aria-hidden="true">${escapeHtml(item.activity_type.slice(0, 1))}</span>
@@ -440,17 +498,29 @@ function renderDashboard(data) {
             <time>${escapeHtml(formatDate(item.record_date))}</time>
           </button>`).join('')}</div>` : '<div class="empty-state"><strong>No recent records</strong><span>New dated records will appear here when available.</span></div>'}</div>
       </article>
+    </section>
+    <section class="dashboard-snapshot" aria-labelledby="dashboardSnapshotTitle">
+      <div class="snapshot-heading"><h3 id="dashboardSnapshotTitle">Register and payment totals</h3><p>Supporting figures from this dashboard response</p></div>
+      <dl class="snapshot-grid">${supportingTotals.map(([label, value]) => `
+        <div class="snapshot-item"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? '—')}</dd></div>`).join('')}
+      </dl>
     </section>`;
 }
 
-function renderSimpleTable(rows, columns, emptyMessage) {
+function renderSimpleTable(rows, columns, emptyMessage, tableLabel = 'Records') {
   if (!rows.length) return `<div class="empty-state"><span class="empty-icon" aria-hidden="true">✓</span><strong>All clear</strong><span>${escapeHtml(emptyMessage)}</span></div>`;
-  return `<div class="table-wrap"><table class="data-table"><thead><tr>${columns.map((column) => `<th scope="col">${escapeHtml(column.label)}</th>`).join('')}</tr></thead><tbody>
+  const table = `<table class="data-table"><thead><tr>${columns.map((column) => `<th scope="col">${escapeHtml(column.label)}</th>`).join('')}</tr></thead><tbody>
     ${rows.map((row) => `<tr>${columns.map((column) => `<td>${renderCell(row[column.key], column)}</td>`).join('')}</tr>`).join('')}
-    </tbody></table></div>`;
+    </tbody></table>`;
+  return tableRegion(table, `${tableLabel} table`);
+}
+
+function tableRegion(table, label) {
+  return `<div class="table-region"><p class="table-scroll-hint">Swipe or scroll horizontally to view all columns.</p><div class="table-wrap" role="region" tabindex="0" aria-label="${escapeHtml(label)}. Scroll horizontally to see all columns on narrow screens.">${table}</div></div>`;
 }
 
 async function loadModule() {
+  if (mainContent.contains(document.activeElement)) mainContent.focus();
   const view = state.view;
   const config = MODULES[view];
   if (!config) return;
@@ -468,13 +538,13 @@ async function loadModule() {
 function moduleShell(config, options) {
   return `
     <section class="page-heading"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.description)}</p></div>
-      <div class="page-actions"><button class="button button-primary" type="button" data-action="add">＋ ${escapeHtml(config.addLabel)}</button></div>
+      <div class="page-actions"><button class="button button-primary" type="button" data-action="add">${escapeHtml(config.addLabel)}</button></div>
     </section>
     <section aria-label="${escapeHtml(config.title)} records">
       <div class="toolbar"><div class="toolbar-left">
-        <label class="search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><span class="visually-hidden">Search ${escapeHtml(config.title)}</span><input type="search" id="moduleSearch" placeholder="Search ${escapeHtml(config.title.toLowerCase())}…" autocomplete="off"></label>
+        <label class="search-wrap"><span class="visually-hidden">Search ${escapeHtml(config.title)}</span><input type="search" id="moduleSearch" placeholder="Search ${escapeHtml(config.title.toLowerCase())}…" autocomplete="off"></label>
         ${config.filters.map((filter) => renderFilter(filter, options)).join('')}
-      </div><div class="toolbar-right">${config.endpoint === 'appointments' ? `<button class="button button-secondary button-small" type="button" data-action="toggle-appointment-view">${state.appointmentView === 'table' ? '▦ Agenda view' : '☷ Table view'}</button>` : ''}<button class="button button-secondary button-small" type="button" data-action="refresh">↻ Refresh</button></div></div>
+      </div><div class="toolbar-right">${config.endpoint === 'appointments' ? `<button class="button button-secondary button-small" type="button" data-action="toggle-appointment-view">${state.appointmentView === 'table' ? 'Agenda view' : 'Table view'}</button>` : ''}<button class="button button-secondary button-small" type="button" data-action="refresh">Refresh</button></div></div>
       <div id="moduleTable" aria-live="polite"><div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading…</div></div>
     </section>`;
 }
@@ -521,6 +591,7 @@ async function refreshModuleRows() {
 }
 
 async function loadReports() {
+  if (mainContent.contains(document.activeElement)) mainContent.focus();
   const requestId = ++state.reportRequest;
   mainContent.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading database reports…</div>';
   try {
@@ -556,7 +627,7 @@ function renderReportShell(options) {
       <div class="report-picker"><label for="reportSelect">Choose report</label><select class="control" id="reportSelect">${Object.entries(REPORTS).map(([key, report]) => `<option value="${escapeHtml(key)}"${key === state.reportId ? ' selected' : ''}>${escapeHtml(report.title)}</option>`).join('')}</select></div>
     </section>
     <section aria-label="Database reports"><div class="toolbar"><div class="toolbar-left" id="reportFilters">${config.filters.map((key) => renderReportFilter(key, options)).join('')}</div>
-      <div class="toolbar-right"><button class="button button-secondary button-small" type="button" data-action="refresh-report">↻ Refresh report</button></div></div>
+      <div class="toolbar-right"><button class="button button-secondary button-small" type="button" data-action="refresh-report">Refresh report</button></div></div>
       <div id="reportTable" aria-live="polite"><div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading report…</div></div>
     </section>`;
 }
@@ -590,7 +661,7 @@ function renderReportTable(rows, config) {
   }
   const head = config.columns.map((column) => `<th scope="col">${escapeHtml(column.label)}</th>`).join('');
   const body = rows.map((row) => `<tr>${config.columns.map((column) => `<td>${renderCell(row[column.key], column, row)}</td>`).join('')}</tr>`).join('');
-  return `<div class="table-wrap"><table class="data-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${renderPagination(state.reportPagination, 'report')}`;
+  return `${tableRegion(`<table class="data-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`, `${config.title} report`)}${renderPagination(state.reportPagination, 'report')}`;
 }
 
 function renderModuleTable(rows, config) {
@@ -604,10 +675,15 @@ function renderModuleTable(rows, config) {
     if (!column.sort) return `<th scope="col"${column.align === 'right' ? ' class="actions-head"' : ''}>${escapeHtml(column.label)}</th>`;
     const active = state.sort === column.key;
     const marker = active ? (state.direction === 'asc' ? '↑' : '↓') : '↕';
-    return `<th scope="col"><button class="sort-button" type="button" data-action="sort" data-sort="${escapeHtml(column.key)}" aria-label="Sort by ${escapeHtml(column.label)}">${escapeHtml(column.label)} <span class="sort-indicator" aria-hidden="true">${marker}</span></button></th>`;
+    const sortState = active ? ` aria-sort="${state.direction === 'asc' ? 'ascending' : 'descending'}"` : '';
+    const sortLabel = active
+      ? `${column.label}, sorted ${state.direction === 'asc' ? 'ascending' : 'descending'}`
+      : `Sort by ${column.label} ascending`;
+    return `<th scope="col"${sortState}><button class="sort-button" type="button" data-action="sort" data-sort="${escapeHtml(column.key)}" aria-label="${escapeHtml(sortLabel)}">${escapeHtml(column.label)} <span class="sort-indicator" aria-hidden="true">${marker}</span></button></th>`;
   }).join('');
   const body = rows.map((row) => `<tr>${config.columns.map((column) => `<td${column.align === 'right' ? ' class="actions-head"' : ''}>${renderCell(row[column.key], column, row)}</td>`).join('')}<td class="actions-head"><div class="row-actions">${renderRowActions(state.view, config, row)}</div></td></tr>`).join('');
-  return `<div class="table-wrap"><table class="data-table"><thead><tr>${headers}<th scope="col" class="actions-head">Actions</th></tr></thead><tbody>${body}</tbody></table></div>${renderPagination(state.pagination, 'module')}`;
+  const table = `<table class="data-table"><thead><tr>${headers}<th scope="col" class="actions-head">Actions</th></tr></thead><tbody>${body}</tbody></table>`;
+  return `${tableRegion(table, `${config.title} records`)}${renderPagination(state.pagination, 'module')}`;
 }
 
 function renderPagination(info, context) {
@@ -637,32 +713,35 @@ function renderAppointmentAgenda(rows, config) {
       <div class="agenda-events">${items.sort((a, b) => String(a.appointment_time).localeCompare(String(b.appointment_time))).map((row) => `
         <article class="agenda-event"><time>${escapeHtml(row.appointment_time)}</time><div class="agenda-event-copy"><strong>${escapeHtml(row.patient_name)}</strong><span>${escapeHtml(row.doctor_name)} · ${escapeHtml(row.department_name)}</span></div>${statusPill(row.status)}<div class="row-actions">${renderRowActions('appointments', config, row)}</div></article>`).join('')}</div>
     </section>`).join('');
-  return `<div class="agenda-list" aria-label="Appointment agenda">${cards}</div>`;
+  return `<section class="agenda-list" aria-label="Appointment agenda">${cards}</section>`;
 }
 
 function renderRowActions(view, config, row) {
   const id = row[primaryKey(view)];
   const safeId = escapeHtml(id);
+  const primaryColumn = config.columns.find((column) => column.strong) || config.columns[0];
+  const recordLabel = `${config.singular} ${row[primaryColumn.key] ?? `#${id}`} (#${id})`;
+  const accessibleRecordLabel = escapeHtml(recordLabel);
   const actions = [];
   if (view === 'patients') {
-    actions.push(`<button class="button button-secondary button-small" type="button" data-action="details" data-id="${safeId}">History</button>`);
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="details" data-id="${safeId}" aria-label="View history for ${accessibleRecordLabel}">History</button>`);
   } else {
-    actions.push(`<button class="button button-secondary button-small" type="button" data-action="view-record" data-view="${escapeHtml(view)}" data-id="${safeId}">View</button>`);
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="view-record" data-view="${escapeHtml(view)}" data-id="${safeId}" aria-label="View ${accessibleRecordLabel}">View</button>`);
   }
   if (view === 'admissions' && !row.discharge_date) {
-    actions.push(`<button class="button button-secondary button-small" type="button" data-action="move-room" data-id="${safeId}">Move room</button>`);
-    actions.push(`<button class="button button-secondary button-small" type="button" data-action="discharge" data-id="${safeId}">Discharge</button>`);
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="move-room" data-id="${safeId}" aria-label="Move ${accessibleRecordLabel} to another room">Move room</button>`);
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="discharge" data-id="${safeId}" aria-label="Discharge ${accessibleRecordLabel}">Discharge</button>`);
   }
-  if (view === 'medicines') actions.push(`<button class="button button-secondary button-small" type="button" data-action="stock" data-id="${safeId}">Adjust stock</button>`);
+  if (view === 'medicines') actions.push(`<button class="button button-secondary button-small" type="button" data-action="stock" data-id="${safeId}" aria-label="Adjust stock for ${accessibleRecordLabel}">Adjust stock</button>`);
   if (view === 'appointments' && row.status === 'Scheduled') {
-    actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="Completed" data-id="${safeId}">Complete</button>`);
-    actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="Cancelled" data-id="${safeId}">Cancel</button>`);
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="Completed" data-id="${safeId}" aria-label="Mark ${accessibleRecordLabel} completed">Complete</button>`);
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="Cancelled" data-id="${safeId}" aria-label="Cancel ${accessibleRecordLabel}">Cancel</button>`);
   }
   if (!config.noEdit && (view !== 'appointments' || row.status === 'Scheduled')) {
-    actions.push(`<button class="button button-secondary button-small" type="button" data-action="edit" data-id="${safeId}">Edit</button>`);
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="edit" data-id="${safeId}" aria-label="Edit ${accessibleRecordLabel}">Edit</button>`);
   }
   if (!config.noDelete && view !== 'appointments' && (view !== 'admissions' || row.discharge_date)) {
-    actions.push(`<button class="button button-danger button-small" type="button" data-action="delete" data-id="${safeId}" aria-label="Delete ${escapeHtml(config.singular)}">Delete</button>`);
+    actions.push(`<button class="button button-danger button-small" type="button" data-action="delete" data-id="${safeId}" aria-label="Delete ${accessibleRecordLabel}">Delete</button>`);
   }
   return actions.join('');
 }
@@ -750,17 +829,19 @@ function renderField(field, options, record) {
   const required = Boolean(field.required);
   const label = `${escapeHtml(field.label)}${required ? ' <span class="required-mark" aria-hidden="true">*</span>' : ''}`;
   const requiredAttr = required ? ' required' : '';
+  const hintId = field.hint ? `${id}-hint` : '';
+  const describedByAttr = hintId ? ` aria-describedby="${hintId}"` : '';
   let control = '';
   const value = fieldValue(field, record);
   if (field.type === 'select' || field.type === 'related') {
     const choices = resolveChoices(field, options, record);
     const blank = `<option value=""${value === '' ? ' selected' : ''}>Select…</option>`;
-    const select = `<select class="form-control" id="${id}" name="${escapeHtml(field.key)}"${requiredAttr}>${blank}${choices.map((choice) => `<option value="${escapeHtml(choice.value)}"${String(choice.value) === value ? ' selected' : ''}>${escapeHtml(choice.label)}</option>`).join('')}</select>`;
+    const select = `<select class="form-control" id="${id}" name="${escapeHtml(field.key)}"${requiredAttr}${describedByAttr}>${blank}${choices.map((choice) => `<option value="${escapeHtml(choice.value)}"${String(choice.value) === value ? ' selected' : ''}>${escapeHtml(choice.label)}</option>`).join('')}</select>`;
     control = field.type === 'related'
       ? `<div class="related-select"><input class="form-control related-search" type="search" data-related-search="${id}" aria-label="Search ${escapeHtml(field.label)} options" placeholder="Type to filter ${escapeHtml(field.label.toLowerCase())}…">${select}</div>`
       : select;
   } else if (field.type === 'textarea') {
-    control = `<textarea class="form-control" id="${id}" name="${escapeHtml(field.key)}" maxlength="${field.maxLength || ''}" placeholder="${escapeHtml(field.placeholder || '')}"${requiredAttr}>${escapeHtml(value)}</textarea>`;
+    control = `<textarea class="form-control" id="${id}" name="${escapeHtml(field.key)}" maxlength="${field.maxLength || ''}" placeholder="${escapeHtml(field.placeholder || '')}"${requiredAttr}${describedByAttr}>${escapeHtml(value)}</textarea>`;
   } else {
     const type = field.type || 'text';
     const extras = [
@@ -772,9 +853,9 @@ function renderField(field, options, record) {
       type === 'date' && field.key === 'appointment_date' && (!record || record.status === 'Scheduled') ? `min="${todayLocal()}"` : '',
       type === 'date' && ['admission_date', 'prescription_date'].includes(field.key) ? `max="${todayLocal()}"` : '',
     ].filter(Boolean).join(' ');
-    control = `<input class="form-control" type="${escapeHtml(type)}" id="${id}" name="${escapeHtml(field.key)}" value="${escapeHtml(value)}" ${extras}${requiredAttr}>`;
+    control = `<input class="form-control" type="${escapeHtml(type)}" id="${id}" name="${escapeHtml(field.key)}" value="${escapeHtml(value)}" ${extras}${requiredAttr}${describedByAttr}>`;
   }
-  const hint = field.hint ? `<small class="field-hint">${escapeHtml(field.hint)}</small>` : '';
+  const hint = field.hint ? `<small class="field-hint" id="${hintId}">${escapeHtml(field.hint)}</small>` : '';
   return `<div class="form-field${field.full ? ' full-width' : ''}"><label for="${id}">${label}</label>${control}${hint}</div>`;
 }
 
@@ -801,6 +882,7 @@ function primaryKey(view) {
 async function openPatientHistory(patientId) {
   modalReturnFocus = document.activeElement;
   modalRoot.innerHTML = '<div class="modal-backdrop"><section class="modal-card modal-wide" role="dialog" aria-modal="true" aria-label="Patient record"><div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading patient history…</div></section></div>';
+  focusModal();
   try {
     const data = await apiRequest(`/api/patients/${patientId}/summary`);
     const patient = data.patient;
@@ -817,8 +899,10 @@ async function openPatientHistory(patientId) {
     ];
     const sectionHtml = sections.map(([title, key, columns]) => `<section class="detail-section"><div class="detail-section-header"><h3>${title}</h3><span class="field-hint">${(data[key] || []).length} records</span></div>${renderSimpleTable(data[key] || [], columns, `No ${title.toLowerCase()} on file.`)}</section>`).join('');
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="patientHistoryTitle"><header class="modal-header"><div><h2 id="patientHistoryTitle">Patient record</h2><p>Related clinical visits, admissions, prescriptions, and billing history.</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><article class="detail-card"><h3>${escapeHtml(patient.patient_name)}</h3><div class="detail-grid">${fields.map(([label, value]) => `<div class="detail-item"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join('')}</div></article>${sectionHtml}</div></section></div>`;
+    focusModal();
   } catch (error) {
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-label="Patient record"><header class="modal-header"><h2>Patient record</h2><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="error-state"><strong>History could not be loaded</strong><p>${escapeHtml(error.message)}</p></div></section></div>`;
+    focusModal();
   }
 }
 
@@ -834,6 +918,7 @@ function openRecordDetails(view, recordId) {
   modalReturnFocus = document.activeElement;
   const config = MODULES[view];
   modalRoot.innerHTML = '<div class="modal-backdrop"><section class="modal-card" role="dialog" aria-modal="true" aria-label="Record details"><div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading record details…</div></section></div>';
+  focusModal();
   apiRequest(`/api/details/${encodeURIComponent(view)}/${encodeURIComponent(recordId)}`).then((payload) => {
     const record = payload.record || {};
     const related = payload.related || {};
@@ -851,8 +936,10 @@ function openRecordDetails(view, recordId) {
     const print = view === 'bills' ? '<button class="button button-primary" type="button" data-action="print-bill">Print bill</button>' : '';
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide bill-printable" role="dialog" aria-modal="true" aria-labelledby="recordDetailsTitle"><header class="modal-header"><div><h2 id="recordDetailsTitle">${escapeHtml(config.singular[0].toUpperCase() + config.singular.slice(1))} details</h2><p>Record values retrieved from the live API.</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header>
       <div class="modal-body"><article class="detail-card"><h3>${escapeHtml(record[config.columns[0].key] ?? `Record #${recordId}`)}</h3><div class="detail-grid">${fields}</div></article>${sections}<footer class="modal-footer">${print}<button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
+    focusModal();
   }).catch((error) => {
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-label="Record details"><header class="modal-header"><h2>Record details</h2><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="error-state"><strong>Details could not be loaded</strong><p>${escapeHtml(error.message)}</p></div></section></div>`;
+    focusModal();
   });
 }
 
@@ -883,15 +970,49 @@ async function openMoveRoom(admissionId) {
       : '<div class="empty-state"><strong>No rooms available</strong><span>Discharge or free a room before moving this patient.</span></div>';
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="moveRoomTitle"><header class="modal-header"><div><h2 id="moveRoomTitle">Move patient to another room</h2><p>${escapeHtml(row?.patient_name || 'Patient')} · currently in ${escapeHtml(row?.room_number || 'unknown room')}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="moveRoomForm" data-id="${escapeHtml(admissionId)}"><div class="form-field">${availableRooms.length ? '<label for="moveRoomSelect">Available room <span class="required-mark" aria-hidden="true">*</span></label>' : ''}${roomControl}<small class="field-hint">The active stay remains open; Oracle moves the room occupancy in the same transaction.</small></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button>${availableRooms.length ? '<button class="button button-primary" type="submit">Move patient</button>' : ''}</footer></form></div></section></div>`;
     if (availableRooms.length) document.getElementById('moveRoomSelect').focus();
+    else focusModal();
   } catch (error) {
     toast(error.message, 'error');
   }
+}
+
+function focusModal() {
+  const dialog = modalRoot.querySelector('[role="dialog"]');
+  if (!dialog) return;
+  const target = dialog.querySelector('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])');
+  if (target) {
+    target.focus();
+    return;
+  }
+  dialog.setAttribute('tabindex', '-1');
+  dialog.focus();
 }
 
 function closeModal() {
   modalRoot.innerHTML = '';
   if (modalReturnFocus && modalReturnFocus.isConnected) modalReturnFocus.focus();
   modalReturnFocus = null;
+}
+
+function focusCurrentViewHeading() {
+  const heading = mainContent.querySelector('.page-heading h2');
+  if (heading) {
+    heading.setAttribute('tabindex', '-1');
+    heading.focus();
+  } else {
+    mainContent.focus();
+  }
+}
+
+function focusRenderedRows(containerId = 'moduleTable', preferredSelector = '') {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const target = (preferredSelector ? container.querySelector(preferredSelector) : null)
+    || container.querySelector('.table-wrap')
+    || container.querySelector('.error-state button')
+    || container;
+  if (target === container) target.setAttribute('tabindex', '-1');
+  target.focus();
 }
 
 function showFormError(message) {
@@ -921,10 +1042,15 @@ async function submitRecordForm(form) {
       method: id ? 'PUT' : 'POST', body: JSON.stringify(payload),
     });
     closeModal();
+    mainContent.focus();
     state.options = null;
     state.page = 1;
     toast(`${config.singular[0].toUpperCase()}${config.singular.slice(1)} ${id ? 'updated' : 'created'} successfully.`);
-    if (state.view === 'dashboard') await loadDashboard(); else await loadModule();
+    if (state.view === 'dashboard') await loadDashboard();
+    else {
+      await loadModule();
+      focusCurrentViewHeading();
+    }
     await checkConnection();
   } catch (error) {
     showFormError(error.message);
@@ -941,6 +1067,7 @@ async function changeAppointmentStatus(id, status) {
     toast(status === 'Completed' ? 'Appointment marked completed.' : 'Appointment cancelled; its slot is available.');
     state.page = 1;
     await refreshModuleRows();
+    focusRenderedRows();
   } catch (error) {
     toast(error.message, 'error');
   }
@@ -957,6 +1084,7 @@ async function deleteRecord(id) {
     state.options = null;
     state.page = 1;
     await loadModule();
+    focusCurrentViewHeading();
   } catch (error) {
     toast(error.message, 'error');
   }
@@ -971,8 +1099,10 @@ async function handleStockForm(form) {
   try {
     await apiRequest(`/api/medicines/${form.dataset.id}/stock-adjustments`, { method: 'POST', body: JSON.stringify({ change }) });
     closeModal();
+    mainContent.focus();
     toast('Medicine stock updated.');
     await loadModule();
+    focusCurrentViewHeading();
   } catch (error) {
     showFormError(error.message);
     button.disabled = false;
@@ -989,9 +1119,11 @@ async function handleDischargeForm(form) {
       method: 'POST', body: JSON.stringify({ discharge_date: form.elements.namedItem('discharge_date').value }),
     });
     closeModal();
+    mainContent.focus();
     toast('Patient discharged and room released.');
     state.options = null;
     await loadModule();
+    focusCurrentViewHeading();
   } catch (error) {
     showFormError(error.message);
     button.disabled = false;
@@ -1008,9 +1140,11 @@ async function handleMoveRoomForm(form) {
       method: 'PUT', body: JSON.stringify({ room_id: form.elements.namedItem('room_id').value }),
     });
     closeModal();
+    mainContent.focus();
     toast('Patient moved; room occupancy updated.');
     state.options = null;
     await loadModule();
+    focusCurrentViewHeading();
   } catch (error) {
     showFormError(error.message);
     button.disabled = false;
@@ -1032,9 +1166,9 @@ document.addEventListener('click', async (event) => {
     event.preventDefault();
     navigate(target.dataset.view);
   } else if (action === 'toggle-nav') {
-    const sidebar = document.getElementById('sidebar');
-    const open = sidebar.classList.toggle('open');
-    target.setAttribute('aria-expanded', String(open));
+    setMobileNavigation(!document.getElementById('sidebar').classList.contains('open'));
+  } else if (action === 'close-nav') {
+    setMobileNavigation(false);
   } else if (action === 'retry') {
     if (state.view === 'dashboard') loadDashboard();
     else if (state.view === 'reports') loadReports();
@@ -1052,17 +1186,19 @@ document.addEventListener('click', async (event) => {
     refreshReportRows();
   } else if (action === 'toggle-appointment-view') {
     state.appointmentView = state.appointmentView === 'table' ? 'agenda' : 'table';
-    target.textContent = state.appointmentView === 'table' ? '▦ Agenda view' : '☷ Table view';
+    target.textContent = state.appointmentView === 'table' ? 'Agenda view' : 'Table view';
     const container = document.getElementById('moduleTable');
     if (container) container.innerHTML = renderModuleTable(state.rows, MODULES.appointments);
   } else if (action === 'page') {
     const page = Number(target.dataset.page);
     if (target.dataset.context === 'report') {
       state.reportPage = Math.max(1, page);
-      refreshReportRows();
+      await refreshReportRows();
+      focusRenderedRows('reportTable');
     } else {
       state.page = Math.max(1, page);
-      refreshModuleRows();
+      await refreshModuleRows();
+      focusRenderedRows();
     }
   } else if (action === 'appointment-status') {
     changeAppointmentStatus(target.dataset.id, target.dataset.status);
@@ -1075,7 +1211,10 @@ document.addEventListener('click', async (event) => {
     if (state.sort === sort) state.direction = state.direction === 'asc' ? 'desc' : 'asc';
     else { state.sort = sort; state.direction = 'asc'; }
     state.page = 1;
-    refreshModuleRows();
+    await refreshModuleRows();
+    const sortedButton = [...document.querySelectorAll('.sort-button')].find((button) => button.dataset.sort === sort);
+    if (sortedButton) sortedButton.focus();
+    else focusRenderedRows();
   } else if (action === 'edit') {
     const id = target.dataset.id;
     try {
@@ -1125,10 +1264,12 @@ document.addEventListener('change', async (event) => {
     state.pageSize = Number(event.target.value) || 25;
     if (event.target.dataset.context === 'report') {
       state.reportPage = 1;
-      refreshReportRows();
+      await refreshReportRows();
+      focusRenderedRows('reportTable', '.page-size-select');
     } else {
       state.page = 1;
-      refreshModuleRows();
+      await refreshModuleRows();
+      focusRenderedRows('moduleTable', '.page-size-select');
     }
   } else if (event.target.id === 'reportSelect') {
     state.reportId = event.target.value;
@@ -1185,11 +1326,36 @@ document.addEventListener('submit', (event) => {
 
 document.addEventListener('keydown', (event) => {
   const dialog = modalRoot.querySelector('[role="dialog"]');
-  if (!dialog) return;
-  if (event.key === 'Escape') {
+  if (event.key === 'Escape' && dialog) {
     closeModal();
     return;
   }
+  const sidebar = document.getElementById('sidebar');
+  if (event.key === 'Escape' && sidebar.classList.contains('open')) {
+    setMobileNavigation(false);
+    return;
+  }
+  if (!dialog && event.key === 'Tab' && sidebar.classList.contains('open')) {
+    const focusable = [...sidebar.querySelectorAll('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+    if (!focusable.length) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!sidebar.contains(document.activeElement)) {
+      event.preventDefault();
+      first.focus();
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+    return;
+  }
+  if (!dialog) return;
   if (event.key === 'Tab') {
     const focusable = [...dialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
       .filter((element) => !element.hidden);
@@ -1199,7 +1365,10 @@ document.addEventListener('keydown', (event) => {
     }
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
+    if (!dialog.contains(document.activeElement)) {
+      event.preventDefault();
+      first.focus();
+    } else if (event.shiftKey && document.activeElement === first) {
       event.preventDefault();
       last.focus();
     } else if (!event.shiftKey && document.activeElement === last) {
@@ -1213,9 +1382,11 @@ window.addEventListener('popstate', () => {
   const desired = location.hash.slice(1);
   navigate(NAV_ITEMS.some((item) => item.id === desired) ? desired : 'dashboard', false);
 });
+window.addEventListener('resize', syncNavigationBreakpoint, { passive: true });
 
 refreshConnectionDate();
 renderNavigation();
+syncNavigationBreakpoint();
 const initialView = location.hash.slice(1);
 navigate(NAV_ITEMS.some((item) => item.id === initialView) ? initialView : 'dashboard');
 checkConnection();

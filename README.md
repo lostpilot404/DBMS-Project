@@ -11,6 +11,16 @@ A college Database Systems project built around an Oracle relational database, a
 
 The nine relations are **Department, Doctor, Patient, Appointment, Room, Admission, Medicine, Prescription,** and **Bill**. Foreign keys use Oracle's default `NO ACTION`/restrict behavior: records with dependent history cannot be deleted by accident.
 
+## Frontend design direction
+
+The product-specific hierarchy, visual tokens, compliance review, and verification limits are documented in [`docs/FRONTEND_DESIGN.md`](docs/FRONTEND_DESIGN.md). The full supplied acceptance playbook is preserved at [`docs/FrontEnd.md`](docs/FrontEnd.md).
+
+The interface is an educational **hospital administration/operations** app, not a patient portal, clinical decision tool, or live hospital service. Its visual hierarchy prioritizes the records staff need to act on—upcoming appointments, active admissions, available rooms, and pending bills—then presents register and payment totals as supporting context. Every figure is rendered from the existing dashboard API response; an unavailable database produces an error state, not sample KPI values, trend claims, or assumed identities.
+
+The UI uses a restrained navy/teal system, the platform's system font, stronger text/control contrast, and shared 12/13/14px text tokens. Dense records stay in semantic tables; narrow screens can scroll each table in a labeled, keyboard-focusable region rather than silently dropping columns. The appointment agenda reflows at small widths. Desktop navigation remains persistent; mobile navigation is an overlay with a backdrop, Escape handling, focus return/trapping, and an inert closed drawer. Focus rings and reduced-motion preferences are supported in CSS.
+
+These are implemented design decisions, not a completed accessibility certification or visual QA sign-off. Browser-specific rendering and assistive-technology behavior still need review in a real browser/device setup; see the verification boundary below.
+
 ## Repository map
 
 ```text
@@ -22,6 +32,8 @@ hms/                         Flask API, Oracle connection pool, validation
 static/                      HTML, CSS, and JavaScript UI
 tests/                       Test-double checks plus opt-in live Oracle integration tests
 docs/PROJECT_REPORT.md       Submission-oriented technical report
+docs/FRONTEND_DESIGN.md      Frontend direction, compliance, and verification limits
+docs/FrontEnd.md             Full supplied frontend acceptance playbook
 docs/ER_DIAGRAM.mmd          Editable Mermaid ER diagram
 .env.example                 Safe configuration template
 ```
@@ -140,7 +152,7 @@ Open <http://127.0.0.1:5000>. Set `PORT` to change the port. `FLASK_DEBUG=true` 
 
 | Area | Implemented workflow | Integrity / history rules |
 |---|---|---|
-| Dashboard | Oracle-backed counts, upcoming appointments, outstanding bills, low-stock medicines, recent dated records, and links to modules. | No demo/fabricated statistics; a disconnected database shows an error state. |
+| Dashboard | Oracle-backed counts, upcoming appointments, outstanding bills, low-stock medicines, recent dated records, module links, and an explicit refresh action. | No demo/fabricated statistics; a disconnected database shows an error state. |
 | Departments | Create, edit, search, sort, paginate, inspect associated doctors, and delete only when unreferenced. | Unique department name; doctor foreign keys prevent destructive parent deletion. |
 | Doctors | Create/edit profiles, choose a department, search/filter/sort/page, inspect appointments and prescriptions, and delete only when unreferenced. | Required department FK; phone/email validation and optional unique values. |
 | Patients | Register/edit, search/filter by gender/blood group, sort/page, and review appointment, admission, prescription, and billing history. | Date/phone/blood-group validation; dependent foreign keys protect history. |
@@ -164,7 +176,7 @@ python -m unittest discover -s tests -v
 node --check static/app.js
 ```
 
-**Executed automated/test-double checks (2026-10-27):** `.venv/bin/python -m unittest discover -s tests -v` discovered 35 tests: 26 passed using fake database objects, three Oracle safety-guard unit tests passed, and six opt-in live-Oracle tests were skipped. `node --check static/app.js`, Python compilation, `git diff --check`, and a one-off `css-tree` parse (189 top-level rules) passed. A jsdom DOM/event smoke rendered the dashboard and all nine modules, switched through all twelve reports, and exercised admission room move, appointment agenda/status, patient history, report pagination, bill details/print/form, searchable related-selects, and reset; its 45 API requests were mocked. A separate no-Oracle HTTP startup check returned 200 for `/` and structured 503 responses for `/api/health` and `/api/dashboard`; this is not Oracle integration or real-browser visual/layout testing.
+**Latest audit checks (2026-10-27):** `.venv/bin/python -m unittest discover -s tests -v` ran 35 tests: 29 passed (26 fake-database/API cases and three Oracle safety-guard cases) and six opt-in live-Oracle tests were skipped. `node --check static/app.js`, a `css-tree` parse and undefined-token check (212 top-level CSS nodes), HTML parsing/duplicate-ID check, and `git diff --check` passed. A temporary jsdom interaction smoke made 68 mocked API calls and exercised the dashboard (including refresh and a truthful unavailable state), all nine modules with sorting and forms, all twelve report views, API-backed related selectors, search/pagination/page-size/filter queries, a mocked create payload, appointment agenda/status, patient-history focus/return, the mobile drawer, and 390px/1024px state changes. This is DOM/event verification, not browser rendering. Selected text, status, input-border and focus color pairs were measured; the highest reported normal-text check was 4.65:1 on the sidebar, and control-border contrast was 3.52:1. These are selected measurements, not a complete WCAG audit. The running Flask app served `/`, CSS, JavaScript and favicon with HTTP 200; `/api/health` and `/api/dashboard` returned the truthful HTTP 503 `database_unavailable` response without Oracle configuration. No browser engine or live Oracle instance was available, so rendered screenshots, real-device/zoom/reflow, assistive-technology behavior, browser console/network inspection, and Oracle workflows were not verified.
 
 **Real-Oracle integration:** after preparing the dedicated schema above, run the opt-in suite with `HMS_ORACLE_INTEGRATION=1`. Do not count skipped tests as Oracle verification. Run `@sql/04_verification.sql` after schema/data setup and review its output.
 

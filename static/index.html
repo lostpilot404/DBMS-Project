@@ -11,19 +11,21 @@
   <script src="/static/app.js" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#mainContent">Skip to main content</a>
   <div class="app-shell">
     <aside class="sidebar" id="sidebar" aria-label="Main navigation">
       <a class="brand" href="#dashboard" aria-label="CarePoint home" data-action="navigate" data-view="dashboard">
         <span class="brand-mark" aria-hidden="true">+</span>
-        <span class="brand-copy"><strong>CarePoint</strong><small>HOSPITAL SYSTEM</small></span>
+        <span class="brand-copy"><strong>CarePoint</strong><small>Hospital system</small></span>
       </a>
-      <div class="nav-label">WORKSPACE</div>
+      <div class="nav-label">Workspace</div>
       <nav class="primary-nav" id="primaryNav"></nav>
       <div class="sidebar-footer">
         <span class="sidebar-footer-mark" aria-hidden="true">DB</span>
         <span><strong>Database-backed</strong><small>Oracle · Flask API</small></span>
       </div>
     </aside>
+    <button class="sidebar-backdrop" type="button" aria-label="Close navigation" data-action="close-nav"></button>
 
     <div class="main-column">
       <header class="topbar">
@@ -31,8 +33,8 @@
           <span aria-hidden="true">☰</span>
         </button>
         <div class="topbar-heading">
-          <span class="eyebrow">HOSPITAL MANAGEMENT</span>
-          <h1 id="pageTitle">Dashboard</h1>
+          <span class="eyebrow">Hospital management</span>
+          <h1 id="pageTitle" tabindex="-1">Dashboard</h1>
         </div>
         <div class="topbar-meta">
           <span class="current-date" id="currentDate"></span>
@@ -40,7 +42,6 @@
             <span class="connection-dot" aria-hidden="true"></span>
             <span id="connectionLabel">Connecting</span>
           </span>
-          <span class="user-avatar" aria-label="Project workspace">CP</span>
         </div>
       </header>
 
