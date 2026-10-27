@@ -1,0 +1,1221 @@
+/* Hospital Management System UI. All data is loaded from the Flask/Oracle API. */
+'use strict';
+
+const NAV_ITEMS = [
+  { id: 'dashboard', label: 'Dashboard', icon: '◫' },
+  { id: 'departments', label: 'Departments', icon: '▦' },
+  { id: 'doctors', label: 'Doctors', icon: '✚' },
+  { id: 'patients', label: 'Patients', icon: '◎' },
+  { id: 'appointments', label: 'Appointments', icon: '◷' },
+  { id: 'rooms', label: 'Rooms', icon: '▤' },
+  { id: 'admissions', label: 'Admissions', icon: '⇥' },
+  { id: 'medicines', label: 'Medicines', icon: '⌁' },
+  { id: 'prescriptions', label: 'Prescriptions', icon: '☷' },
+  { id: 'bills', label: 'Billing', icon: '₹' },
+  { id: 'reports', label: 'Reports', icon: '▥' },
+];
+
+const CHOICES = {
+  gender: [{ value: 'M', label: 'Male' }, { value: 'F', label: 'Female' }, { value: 'O', label: 'Other' }],
+  appointment_status: ['Scheduled', 'Completed', 'Cancelled'].map((value) => ({ value, label: value })),
+  room_status: ['Available', 'Occupied', 'Maintenance'].map((value) => ({ value, label: value })),
+  room_type: ['General', 'Semi-private', 'Private', 'ICU'].map((value) => ({ value, label: value })),
+  payment_status: ['Pending', 'Paid'].map((value) => ({ value, label: value })),
+  blood_group: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map((value) => ({ value, label: value })),
+  low_stock: [{ value: 'true', label: 'Low stock (< 10)' }, { value: 'false', label: 'In stock (10+)' }],
+};
+
+const MODULES = {
+  departments: {
+    title: 'Departments', description: 'Organize clinical services and see the doctors assigned to each department.',
+    endpoint: 'departments', addLabel: 'Add department', singular: 'department',
+    columns: [{ key: 'department_name', label: 'Department', sort: true, strong: true }, { key: 'location', label: 'Location' }, { key: 'associated_doctors', label: 'Associated doctors' }, { key: 'doctor_count', label: 'Count', align: 'right' }],
+    fields: [
+      { key: 'department_name', label: 'Department name', required: true, maxLength: 100, placeholder: 'e.g. Neurology' },
+      { key: 'location', label: 'Location', required: true, maxLength: 150, placeholder: 'Building and floor' },
+    ],
+    filters: [],
+  },
+  doctors: {
+    title: 'Doctors', description: 'Maintain clinician profiles, contact information, and department assignments.',
+    endpoint: 'doctors', addLabel: 'Register doctor', singular: 'doctor',
+    columns: [{ key: 'doctor_name', label: 'Doctor', strong: true, sort: true }, { key: 'specialization', label: 'Specialization', sort: true }, { key: 'department_name', label: 'Department', sort: true }, { key: 'phone', label: 'Phone' }, { key: 'email', label: 'Email' }],
+    fields: [
+      { key: 'doctor_name', label: 'Doctor name', required: true, maxLength: 150, placeholder: 'Dr. Firstname Lastname' },
+      { key: 'specialization', label: 'Specialization', required: true, maxLength: 120, placeholder: 'Clinical specialty' },
+      { key: 'department_id', label: 'Department', type: 'related', source: 'departments', required: true },
+      { key: 'phone', label: 'Phone', type: 'tel', maxLength: 20, placeholder: '+91-90000-00000' },
+      { key: 'email', label: 'Email', type: 'email', maxLength: 254, placeholder: 'doctor@example.test' },
+    ],
+    filters: [{ key: 'department_id', label: 'All departments', source: 'departments' }],
+  },
+  patients: {
+    title: 'Patients', description: 'Search patient records and review linked clinical and billing history.',
+    endpoint: 'patients', addLabel: 'Register patient', singular: 'patient',
+    columns: [{ key: 'patient_name', label: 'Patient', strong: true, sort: true }, { key: 'date_of_birth', label: 'Date of birth', format: 'date', sort: true }, { key: 'gender', label: 'Gender', format: 'gender' }, { key: 'phone', label: 'Phone' }, { key: 'blood_group', label: 'Blood group' }],
+    fields: [
+      { key: 'patient_name', label: 'Patient name', required: true, maxLength: 150, placeholder: 'Full name' },
+      { key: 'date_of_birth', label: 'Date of birth', type: 'date', required: true },
+      { key: 'gender', label: 'Gender', type: 'select', choices: 'gender', required: true },
+      { key: 'phone', label: 'Phone', type: 'tel', maxLength: 20, placeholder: '+91-90000-00000' },
+      { key: 'blood_group', label: 'Blood group', type: 'select', choices: 'blood_group', optional: true, includeBlank: true },
+      { key: 'address', label: 'Address', type: 'textarea', maxLength: 300, optional: true, full: true, placeholder: 'Street, locality, city' },
+    ],
+    filters: [
+      { key: 'gender', label: 'All genders', choices: 'gender' },
+      { key: 'blood_group', label: 'All blood groups', choices: 'blood_group' },
+    ],
+  },
+  appointments: {
+    title: 'Appointments', description: 'Book, reschedule, complete, or cancel patient visits with conflict protection.',
+    endpoint: 'appointments', addLabel: 'Book appointment', singular: 'appointment',
+    columns: [{ key: 'appointment_date', label: 'Date', format: 'date', sort: true }, { key: 'appointment_time', label: 'Time', sort: true }, { key: 'patient_name', label: 'Patient', strong: true, sort: true }, { key: 'doctor_name', label: 'Doctor', sort: true }, { key: 'department_name', label: 'Department' }, { key: 'status', label: 'Status', format: 'status', sort: true }],
+    fields: [
+      { key: 'patient_id', label: 'Patient', type: 'related', source: 'patients', required: true },
+      { key: 'doctor_id', label: 'Doctor', type: 'related', source: 'doctors', required: true },
+      { key: 'appointment_date', label: 'Appointment date', type: 'date', required: true },
+      { key: 'appointment_time', label: 'Appointment time', type: 'time', required: true, hint: 'Use 24-hour time.' },
+      { key: 'status', label: 'Status', type: 'select', choices: 'appointment_status', required: true, default: 'Scheduled' },
+    ],
+    filters: [
+      { key: 'patient_id', label: 'All patients', source: 'patients' },
+      { key: 'doctor_id', label: 'All doctors', source: 'doctors' },
+      { key: 'status', label: 'All statuses', choices: 'appointment_status' },
+      { key: 'date_from', label: 'From date', type: 'date' },
+      { key: 'date_to', label: 'To date', type: 'date' },
+    ],
+    noDelete: true,
+  },
+  rooms: {
+    title: 'Rooms', description: 'Monitor room types and availability; active admissions manage Occupied status.',
+    endpoint: 'rooms', addLabel: 'Add room', singular: 'room',
+    columns: [{ key: 'room_number', label: 'Room', strong: true, sort: true }, { key: 'room_type', label: 'Type', sort: true }, { key: 'availability_status', label: 'Availability', format: 'status', sort: true }],
+    fields: [
+      { key: 'room_number', label: 'Room number', required: true, maxLength: 20, placeholder: 'e.g. R-201' },
+      { key: 'room_type', label: 'Room type', type: 'select', choices: 'room_type', required: true },
+      { key: 'availability_status', label: 'Availability', type: 'select', choices: 'room_status', required: true, default: 'Available', hint: 'Occupied status is changed by an active admission.' },
+    ],
+    filters: [{ key: 'availability_status', label: 'All availability', choices: 'room_status' }],
+  },
+  admissions: {
+    title: 'Admissions', description: 'Admit patients to available rooms and discharge them to release rooms safely.',
+    endpoint: 'admissions', addLabel: 'Admit patient', singular: 'admission',
+    columns: [{ key: 'patient_name', label: 'Patient', strong: true }, { key: 'room_number', label: 'Room' }, { key: 'admission_date', label: 'Admitted', format: 'date', sort: true }, { key: 'discharge_date', label: 'Discharged', format: 'date' }, { key: 'admission_state', label: 'Status', format: 'admission' }],
+    fields: [
+      { key: 'patient_id', label: 'Patient', type: 'related', source: 'patients', required: true },
+      { key: 'room_id', label: 'Available room', type: 'related', source: 'available_rooms', required: true, hint: 'Only currently available rooms are listed.' },
+      { key: 'admission_date', label: 'Admission date', type: 'date', required: true },
+    ],
+    filters: [
+      { key: 'active', label: 'All admissions', choices: [{ value: 'true', label: 'Active' }, { value: 'false', label: 'Discharged' }] },
+      { key: 'patient_id', label: 'All patients', source: 'patients' },
+      { key: 'room_id', label: 'All rooms', source: 'rooms' },
+      { key: 'date_from', label: 'Admitted from', type: 'date' },
+      { key: 'date_to', label: 'Admitted through', type: 'date' },
+    ],
+    noEdit: true,
+    noDelete: true,
+  },
+  medicines: {
+    title: 'Medicines', description: 'Maintain medicine catalogue, prices, and stock. Prescription entry does not dispense stock.',
+    endpoint: 'medicines', addLabel: 'Add medicine', singular: 'medicine',
+    columns: [{ key: 'medicine_name', label: 'Medicine', strong: true, sort: true }, { key: 'manufacturer', label: 'Manufacturer' }, { key: 'price', label: 'Price', format: 'money', sort: true }, { key: 'stock_quantity', label: 'In stock', format: 'stock', sort: true }],
+    fields: [
+      { key: 'medicine_name', label: 'Medicine name', required: true, maxLength: 150, placeholder: 'Name and strength' },
+      { key: 'manufacturer', label: 'Manufacturer', maxLength: 150, optional: true },
+      { key: 'price', label: 'Unit price (INR)', type: 'number', required: true, min: '0', step: '0.01', default: '0.00' },
+      { key: 'stock_quantity', label: 'Stock quantity', type: 'number', required: true, min: '0', step: '1', default: '0' },
+    ],
+    filters: [{ key: 'low_stock', label: 'All stock levels', choices: 'low_stock' }],
+  },
+  prescriptions: {
+    title: 'Prescriptions', description: 'Record medication instructions and view patient, clinician, and medicine history.',
+    endpoint: 'prescriptions', addLabel: 'Create prescription', singular: 'prescription',
+    columns: [{ key: 'prescription_date', label: 'Date', format: 'date', sort: true }, { key: 'patient_name', label: 'Patient', strong: true, sort: true }, { key: 'doctor_name', label: 'Doctor', sort: true }, { key: 'medicine_name', label: 'Medicine', sort: true }, { key: 'dosage', label: 'Dosage' }, { key: 'duration', label: 'Duration' }],
+    fields: [
+      { key: 'patient_id', label: 'Patient', type: 'related', source: 'patients', required: true },
+      { key: 'doctor_id', label: 'Doctor', type: 'related', source: 'doctors', required: true },
+      { key: 'medicine_id', label: 'Medicine', type: 'related', source: 'medicines', required: true },
+      { key: 'dosage', label: 'Dosage', required: true, maxLength: 200, placeholder: 'e.g. 1 tablet after meals' },
+      { key: 'duration', label: 'Duration', required: true, maxLength: 100, placeholder: 'e.g. 5 days' },
+      { key: 'prescription_date', label: 'Prescription date', type: 'date', required: true },
+    ],
+    filters: [
+      { key: 'patient_id', label: 'All patients', source: 'patients' },
+      { key: 'doctor_id', label: 'All doctors', source: 'doctors' },
+      { key: 'medicine_id', label: 'All medicines', source: 'medicines' },
+      { key: 'date_from', label: 'From date', type: 'date' },
+      { key: 'date_to', label: 'To date', type: 'date' },
+    ],
+    noDelete: true,
+  },
+  bills: {
+    title: 'Billing', description: 'Generate bills with database-computed totals and track paid or outstanding balances.',
+    endpoint: 'bills', addLabel: 'Create bill', singular: 'bill',
+    columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient', strong: true }, { key: 'bill_date', label: 'Bill date', format: 'date', sort: true }, { key: 'consultation_charge', label: 'Consultation', format: 'money' }, { key: 'room_charge', label: 'Room', format: 'money' }, { key: 'medicine_charge', label: 'Medicine', format: 'money' }, { key: 'total_amount', label: 'Total', format: 'money', sort: true }, { key: 'payment_status', label: 'Payment', format: 'status', sort: true }],
+    fields: [
+      { key: 'patient_id', label: 'Patient', type: 'related', source: 'patients', required: true },
+      { key: 'bill_date', label: 'Bill date', type: 'date', required: true },
+      { key: 'consultation_charge', label: 'Consultation charge (INR)', type: 'number', min: '0', step: '0.01', required: true, default: '0.00', hint: 'Enter the consultation/service fee.' },
+      { key: 'room_charge', label: 'Room charge (INR)', type: 'number', min: '0', step: '0.01', required: true, default: '0.00', hint: 'Enter the agreed stay charge; no automatic per-night calculation is made.' },
+      { key: 'medicine_charge', label: 'Medicine charge (INR)', type: 'number', min: '0', step: '0.01', required: true, default: '0.00', hint: 'Enter the billed medicine amount; prescriptions are not automatically dispensed.' },
+      { key: 'payment_status', label: 'Payment status', type: 'select', choices: 'payment_status', required: true, default: 'Pending' },
+    ],
+    filters: [
+      { key: 'patient_id', label: 'All patients', source: 'patients' },
+      { key: 'payment_status', label: 'All payment statuses', choices: 'payment_status' },
+      { key: 'date_from', label: 'From date', type: 'date' },
+      { key: 'date_to', label: 'To date', type: 'date' },
+    ],
+    noDelete: true,
+  },
+};
+
+const REPORTS = {
+  'department-doctor-counts': {
+    title: 'Department-wise doctor counts',
+    description: 'Doctors grouped by their assigned department (LEFT JOIN and GROUP BY).',
+    filters: [],
+    columns: [{ key: 'department_name', label: 'Department', strong: true }, { key: 'location', label: 'Location' }, { key: 'doctor_count', label: 'Doctor count' }],
+  },
+  'patient-appointments': {
+    title: 'Patient appointment histories',
+    description: 'Appointment records joined to their patient, doctor, and department.',
+    filters: ['patient_id', 'doctor_id', 'status', 'date_from', 'date_to'],
+    columns: [{ key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'appointment_time', label: 'Time' }, { key: 'patient_name', label: 'Patient' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'department_name', label: 'Department' }, { key: 'status', label: 'Status', format: 'status' }],
+  },
+  'doctor-schedule': {
+    title: 'Upcoming doctor schedules',
+    description: 'Scheduled visits from today onwards, optionally filtered to one doctor.',
+    filters: ['doctor_id', 'date_from', 'date_to'],
+    columns: [{ key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'appointment_time', label: 'Time' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'patient_name', label: 'Patient' }, { key: 'department_name', label: 'Department' }, { key: 'status', label: 'Status', format: 'status' }],
+  },
+  'appointments-by-date-status': {
+    title: 'Appointments by date and status',
+    description: 'Daily appointment counts grouped by status.',
+    filters: ['status', 'date_from', 'date_to'],
+    columns: [{ key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'status', label: 'Status', format: 'status' }, { key: 'appointment_count', label: 'Appointments' }],
+  },
+  'current-admissions': {
+    title: 'Current admissions and room occupancy',
+    description: 'Active patients and the rooms they currently occupy.',
+    filters: ['patient_id', 'room_id', 'date_from', 'date_to'],
+    columns: [{ key: 'patient_name', label: 'Patient' }, { key: 'room_number', label: 'Room' }, { key: 'room_type', label: 'Room type' }, { key: 'admission_date', label: 'Admitted', format: 'date' }],
+  },
+  'admission-history': {
+    title: 'Admission and discharge history',
+    description: 'Historical stays are retained after room release.',
+    filters: ['patient_id', 'room_id', 'date_from', 'date_to'],
+    columns: [{ key: 'patient_name', label: 'Patient' }, { key: 'room_number', label: 'Room' }, { key: 'admission_date', label: 'Admitted', format: 'date' }, { key: 'discharge_date', label: 'Discharged', format: 'date' }],
+  },
+  'room-occupancy': {
+    title: 'Room availability summary',
+    description: 'Room counts by current database availability status.',
+    filters: [],
+    columns: [{ key: 'availability_status', label: 'Status', format: 'status' }, { key: 'room_count', label: 'Rooms' }],
+  },
+  'low-stock-inventory': {
+    title: 'Low-stock medicines',
+    description: 'Medicine inventory below the project low-stock threshold of ten units.',
+    filters: [],
+    columns: [{ key: 'medicine_name', label: 'Medicine' }, { key: 'manufacturer', label: 'Manufacturer' }, { key: 'price', label: 'Unit price', format: 'money' }, { key: 'stock_quantity', label: 'Stock', format: 'stock' }],
+  },
+  'prescription-history': {
+    title: 'Patient prescription histories',
+    description: 'Prescriptions joined to the patient, clinician, and single linked medicine.',
+    filters: ['patient_id', 'doctor_id', 'medicine_id', 'date_from', 'date_to'],
+    columns: [{ key: 'prescription_date', label: 'Date', format: 'date' }, { key: 'patient_name', label: 'Patient' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'medicine_name', label: 'Medicine' }, { key: 'dosage', label: 'Dosage' }, { key: 'duration', label: 'Duration' }],
+  },
+  'patient-bills': {
+    title: 'Individual patient bills',
+    description: 'Bill components and Oracle-computed totals for selected patients and dates.',
+    filters: ['patient_id', 'payment_status', 'date_from', 'date_to'],
+    columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'bill_date', label: 'Date', format: 'date' }, { key: 'patient_name', label: 'Patient' }, { key: 'consultation_charge', label: 'Consultation', format: 'money' }, { key: 'room_charge', label: 'Room', format: 'money' }, { key: 'medicine_charge', label: 'Medicine', format: 'money' }, { key: 'total_amount', label: 'Total', format: 'money' }, { key: 'payment_status', label: 'Payment', format: 'status' }],
+  },
+  'billing-by-status': {
+    title: 'Paid and pending bills',
+    description: 'Bill counts and totals grouped by payment status; payment status changes do not double-count revenue.',
+    filters: [],
+    columns: [{ key: 'payment_status', label: 'Status', format: 'status' }, { key: 'bill_count', label: 'Bills' }, { key: 'total_amount', label: 'Total', format: 'money' }],
+  },
+  'monthly-revenue': {
+    title: 'Monthly revenue and outstanding balances',
+    description: 'Amounts are grouped by bill month and status. Collected totals mean bills marked Paid; there is no payment gateway.',
+    filters: ['date_from', 'date_to'],
+    columns: [{ key: 'revenue_month', label: 'Month', format: 'month' }, { key: 'collected_total', label: 'Paid bills', format: 'money' }, { key: 'outstanding_total', label: 'Pending bills', format: 'money' }],
+  },
+};
+
+const state = {
+  view: 'dashboard',
+  options: null,
+  rows: [],
+  searchTimer: null,
+  sort: null,
+  direction: 'asc',
+  dashboardRequest: 0,
+  moduleRequest: 0,
+  reportRequest: 0,
+  page: 1,
+  pageSize: 25,
+  pagination: null,
+  appointmentView: 'table',
+  reportId: 'department-doctor-counts',
+  reportPage: 1,
+  reportPagination: null,
+};
+
+const mainContent = document.getElementById('mainContent');
+const modalRoot = document.getElementById('modalRoot');
+const toastRegion = document.getElementById('toastRegion');
+let modalReturnFocus = null;
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
+function todayLocal() {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
+function setPageTitle(title) {
+  document.getElementById('pageTitle').textContent = title;
+  document.title = `${title} · CarePoint`;
+}
+
+function renderNavigation() {
+  const nav = document.getElementById('primaryNav');
+  nav.innerHTML = NAV_ITEMS.map((item) => `
+    <button class="nav-link${state.view === item.id ? ' active' : ''}" type="button"
+      data-action="navigate" data-view="${item.id}"${state.view === item.id ? ' aria-current="page"' : ''}>
+      <span class="nav-icon" aria-hidden="true">${escapeHtml(item.icon)}</span>
+      <span>${escapeHtml(item.label)}</span>
+    </button>`).join('');
+}
+
+async function apiEnvelope(path, options = {}) {
+  let response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    });
+  } catch (error) {
+    throw new Error('The application server could not be reached. Check that Flask is running.');
+  }
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    throw new Error('The server returned an unreadable response.');
+  }
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || `Request failed (${response.status}).`);
+  }
+  return payload;
+}
+
+async function apiRequest(path, options = {}) {
+  return (await apiEnvelope(path, options)).data;
+}
+
+function setConnectionState(connected, label) {
+  const container = document.getElementById('connectionState');
+  container.classList.toggle('connected', Boolean(connected));
+  container.classList.toggle('disconnected', !connected);
+  document.getElementById('connectionLabel').textContent = label;
+}
+
+async function checkConnection() {
+  try {
+    await apiRequest('/api/health');
+    setConnectionState(true, 'Oracle connected');
+  } catch (error) {
+    setConnectionState(false, 'Oracle unavailable');
+  }
+}
+
+async function loadOptions(force = false) {
+  if (state.options && !force) return state.options;
+  state.options = await apiRequest('/api/options');
+  return state.options;
+}
+
+function navigate(view, updateHistory = true) {
+  if (view !== 'dashboard' && view !== 'reports' && !MODULES[view]) return;
+  state.view = view;
+  state.sort = null;
+  state.direction = 'asc';
+  state.page = 1;
+  state.pagination = null;
+  state.appointmentView = 'table';
+  renderNavigation();
+  document.getElementById('sidebar').classList.remove('open');
+  document.querySelector('.menu-toggle').setAttribute('aria-expanded', 'false');
+  const title = view === 'dashboard' ? 'Dashboard' : view === 'reports' ? 'Reports' : MODULES[view].title;
+  setPageTitle(title);
+  if (view === 'dashboard') loadDashboard();
+  else if (view === 'reports') loadReports();
+  else loadModule();
+  if (updateHistory && location.hash !== `#${view}`) history.pushState(null, '', `#${view}`);
+}
+
+async function loadDashboard() {
+  const requestId = ++state.dashboardRequest;
+  mainContent.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading live Oracle summaries…</div>';
+  try {
+    const data = await apiRequest('/api/dashboard');
+    if (state.view !== 'dashboard' || requestId !== state.dashboardRequest) return;
+    renderDashboard(data);
+  } catch (error) {
+    if (state.view === 'dashboard' && requestId === state.dashboardRequest) renderLoadError(error, loadDashboard);
+  }
+}
+
+function renderDashboard(data) {
+  const counts = data.counts || {};
+  const cards = [
+    ['Patients', counts.patients, '◎', 'Registered records', 'patients'],
+    ['Doctors', counts.doctors, '✚', 'Assigned to departments', 'doctors'],
+    ['Departments', counts.departments, '▦', 'Clinical services', 'departments'],
+    ['Appointments', counts.appointments, '◷', 'All recorded visits', 'appointments'],
+    ['Upcoming appointments', counts.upcoming_appointments, '◷', 'Scheduled from today', 'appointments'],
+    ['Completed appointments', counts.completed_appointments, '✓', 'Visit history', 'appointments'],
+    ['Cancelled appointments', counts.cancelled_appointments, '×', 'Retained as history', 'appointments'],
+    ['Active admissions', counts.active_admissions, '⇥', 'Currently admitted', 'admissions'],
+    ['Available rooms', counts.available_rooms, '▤', 'Ready for admission', 'rooms'],
+    ['Occupied rooms', counts.occupied_rooms, '▤', 'Managed by admissions', 'rooms'],
+    ['Medicines', counts.total_medicines, '⌁', 'Catalogue records', 'medicines'],
+    ['Low-stock medicines', counts.low_stock_medicines, '!', 'Fewer than 10 units', 'medicines'],
+    ['Pending bills', counts.pending_bills, '₹', 'Awaiting payment', 'bills'],
+    ['Outstanding balance', formatMoney(data.outstanding_total), '₹', 'Bills marked Pending', 'bills'],
+    ['Collected payments', formatMoney(data.collected_total), '✓', 'Bills marked Paid; no gateway', 'bills'],
+  ];
+  const recent = data.recent_records || [];
+  mainContent.innerHTML = `
+    <div class="dashboard-greeting">
+      <div><h2>Hospital overview</h2><p>Every total below is queried from the connected Oracle database.</p></div>
+      <span class="dashboard-mark">Live database summary</span>
+    </div>
+    <section class="summary-grid" aria-label="Hospital summary">
+      ${cards.map(([label, value, icon, note, view]) => `
+        <button class="summary-card summary-card-link" type="button" data-action="navigate" data-view="${escapeHtml(view)}" aria-label="Open ${escapeHtml(view)} records">
+          <span class="summary-top"><span class="summary-label">${escapeHtml(label)}</span><span class="summary-icon" aria-hidden="true">${escapeHtml(icon)}</span></span>
+          <strong class="summary-value">${escapeHtml(value ?? '—')}</strong><span class="summary-note">${escapeHtml(note)}</span>
+        </button>`).join('')}
+    </section>
+    <section class="dashboard-panels">
+      <article class="panel">
+        <header class="panel-header"><div><h2 class="panel-title">Upcoming appointments</h2><p class="panel-subtitle">Scheduled visits from today onwards</p></div><button class="panel-link" type="button" data-action="navigate" data-view="appointments">View appointments →</button></header>
+        <div class="panel-body">${renderSimpleTable(data.upcoming_appointments || [], [
+          { key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'appointment_time', label: 'Time' },
+          { key: 'patient_name', label: 'Patient', strong: true }, { key: 'doctor_name', label: 'Doctor' },
+          { key: 'status', label: 'Status', format: 'status' },
+        ], 'No upcoming appointments are scheduled.')}</div>
+      </article>
+      <article class="panel">
+        <header class="panel-header"><div><h2 class="panel-title">Outstanding bills</h2><p class="panel-subtitle">Pending · ${escapeHtml(formatMoney(data.outstanding_total))} total</p></div><button class="panel-link" type="button" data-action="navigate" data-view="bills">View billing →</button></header>
+        <div class="panel-body">${renderSimpleTable(data.outstanding_bills || [], [
+          { key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient', strong: true },
+          { key: 'bill_date', label: 'Date', format: 'date' }, { key: 'total_amount', label: 'Amount', format: 'money' },
+        ], 'There are no outstanding bills.')}</div>
+      </article>
+      <article class="panel">
+        <header class="panel-header"><div><h2 class="panel-title">Low-stock medicines</h2><p class="panel-subtitle">Less than ten units recorded</p></div><button class="panel-link" type="button" data-action="navigate" data-view="medicines">Manage inventory →</button></header>
+        <div class="panel-body">${renderSimpleTable(data.low_stock_medicines || [], [
+          { key: 'medicine_name', label: 'Medicine', strong: true }, { key: 'manufacturer', label: 'Manufacturer' },
+          { key: 'stock_quantity', label: 'Stock', format: 'stock' },
+        ], 'No medicines are below the low-stock threshold.')}</div>
+      </article>
+      <article class="panel">
+        <header class="panel-header"><div><h2 class="panel-title">Recent records</h2><p class="panel-subtitle">Recent dated appointments, admissions, prescriptions, and bills</p></div><button class="panel-link" type="button" data-action="navigate" data-view="reports">Open reports →</button></header>
+        <div class="panel-body">${recent.length ? `<div class="activity-list">${recent.map((item) => `
+          <button class="activity-item" type="button" data-action="navigate" data-view="${escapeHtml(item.resource)}">
+            <span class="activity-mark" aria-hidden="true">${escapeHtml(item.activity_type.slice(0, 1))}</span>
+            <span class="activity-copy"><strong>${escapeHtml(item.activity_type)} · #${escapeHtml(item.record_id)}</strong><small>${escapeHtml(item.description)}</small></span>
+            <time>${escapeHtml(formatDate(item.record_date))}</time>
+          </button>`).join('')}</div>` : '<div class="empty-state"><strong>No recent records</strong><span>New dated records will appear here when available.</span></div>'}</div>
+      </article>
+    </section>`;
+}
+
+function renderSimpleTable(rows, columns, emptyMessage) {
+  if (!rows.length) return `<div class="empty-state"><span class="empty-icon" aria-hidden="true">✓</span><strong>All clear</strong><span>${escapeHtml(emptyMessage)}</span></div>`;
+  return `<div class="table-wrap"><table class="data-table"><thead><tr>${columns.map((column) => `<th scope="col">${escapeHtml(column.label)}</th>`).join('')}</tr></thead><tbody>
+    ${rows.map((row) => `<tr>${columns.map((column) => `<td>${renderCell(row[column.key], column)}</td>`).join('')}</tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+async function loadModule() {
+  const view = state.view;
+  const config = MODULES[view];
+  if (!config) return;
+  mainContent.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading records…</div>';
+  try {
+    const options = await loadOptions();
+    if (state.view !== view) return;
+    mainContent.innerHTML = moduleShell(config, options);
+    await refreshModuleRows();
+  } catch (error) {
+    if (state.view === view) renderLoadError(error, loadModule);
+  }
+}
+
+function moduleShell(config, options) {
+  return `
+    <section class="page-heading"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.description)}</p></div>
+      <div class="page-actions"><button class="button button-primary" type="button" data-action="add">＋ ${escapeHtml(config.addLabel)}</button></div>
+    </section>
+    <section aria-label="${escapeHtml(config.title)} records">
+      <div class="toolbar"><div class="toolbar-left">
+        <label class="search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><span class="visually-hidden">Search ${escapeHtml(config.title)}</span><input type="search" id="moduleSearch" placeholder="Search ${escapeHtml(config.title.toLowerCase())}…" autocomplete="off"></label>
+        ${config.filters.map((filter) => renderFilter(filter, options)).join('')}
+      </div><div class="toolbar-right">${config.endpoint === 'appointments' ? `<button class="button button-secondary button-small" type="button" data-action="toggle-appointment-view">${state.appointmentView === 'table' ? '▦ Agenda view' : '☷ Table view'}</button>` : ''}<button class="button button-secondary button-small" type="button" data-action="refresh">↻ Refresh</button></div></div>
+      <div id="moduleTable" aria-live="polite"><div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading…</div></div>
+    </section>`;
+}
+
+function renderFilter(filter, options) {
+  const label = filter.label;
+  if (filter.type === 'date') {
+    return `<label class="visually-hidden" for="filter-${escapeHtml(filter.key)}">${escapeHtml(label)}</label><input class="control module-filter" type="date" id="filter-${escapeHtml(filter.key)}" data-filter="${escapeHtml(filter.key)}" aria-label="${escapeHtml(label)}">`;
+  }
+  const choices = filter.source ? (options[filter.source] || []).map((option) => ({ value: option.id, label: option.label })) : (filter.choices ? CHOICES[filter.choices] || filter.choices : []);
+  return `<label class="visually-hidden" for="filter-${escapeHtml(filter.key)}">${escapeHtml(label)}</label><select class="control module-filter" id="filter-${escapeHtml(filter.key)}" data-filter="${escapeHtml(filter.key)}"><option value="">${escapeHtml(label)}</option>${choices.map((choice) => `<option value="${escapeHtml(choice.value)}">${escapeHtml(choice.label)}</option>`).join('')}</select>`;
+}
+
+async function refreshModuleRows() {
+  const view = state.view;
+  const config = MODULES[view];
+  if (!config || !document.getElementById('moduleTable')) return;
+  const requestId = ++state.moduleRequest;
+  const container = document.getElementById('moduleTable');
+  container.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading records…</div>';
+  const params = new URLSearchParams();
+  const search = document.getElementById('moduleSearch')?.value.trim();
+  if (search) params.set('q', search);
+  document.querySelectorAll('.module-filter').forEach((select) => {
+    if (select.value) params.set(select.dataset.filter, select.value);
+  });
+  if (state.sort) {
+    params.set('sort', state.sort);
+    params.set('direction', state.direction);
+  }
+  params.set('page', String(state.page));
+  params.set('page_size', String(state.pageSize));
+  try {
+    const payload = await apiEnvelope(`/api/${config.endpoint}?${params.toString()}`);
+    if (state.view !== view || requestId !== state.moduleRequest || !document.getElementById('moduleTable')) return;
+    const rows = payload.data || [];
+    state.pagination = payload.meta?.pagination || null;
+    state.rows = rows;
+    container.innerHTML = renderModuleTable(rows, config);
+  } catch (error) {
+    if (state.view !== view || requestId !== state.moduleRequest) return;
+    container.innerHTML = `<div class="error-state"><strong>Records could not be loaded</strong><p>${escapeHtml(error.message)}</p><button class="button button-secondary button-small" type="button" data-action="refresh">Try again</button></div>`;
+  }
+}
+
+async function loadReports() {
+  const requestId = ++state.reportRequest;
+  mainContent.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading database reports…</div>';
+  try {
+    const options = await loadOptions();
+    if (state.view !== 'reports' || requestId !== state.reportRequest) return;
+    renderReportShell(options);
+    await refreshReportRows();
+  } catch (error) {
+    if (state.view === 'reports' && requestId === state.reportRequest) renderLoadError(error, loadReports);
+  }
+}
+
+function renderReportFilter(key, options) {
+  if (key === 'date_from' || key === 'date_to') {
+    const label = key === 'date_from' ? 'From date' : 'To date';
+    return `<label class="report-filter-label">${label}<input class="control report-filter" type="date" data-filter="${key}" aria-label="${label}"></label>`;
+  }
+  const source = ({ patient_id: 'patients', doctor_id: 'doctors', medicine_id: 'medicines', room_id: 'rooms' })[key];
+  if (source) {
+    const choices = options[source] || [];
+    const label = ({ patient_id: 'All patients', doctor_id: 'All doctors', medicine_id: 'All medicines', room_id: 'All rooms' })[key];
+    return `<label class="visually-hidden" for="report-${key}">${label}</label><select class="control report-filter" id="report-${key}" data-filter="${key}"><option value="">${label}</option>${choices.map((option) => `<option value="${escapeHtml(option.id)}">${escapeHtml(option.label)}</option>`).join('')}</select>`;
+  }
+  const choices = key === 'status' ? CHOICES.appointment_status : CHOICES.payment_status;
+  const label = key === 'status' ? 'All statuses' : 'All payment statuses';
+  return `<label class="visually-hidden" for="report-${key}">${label}</label><select class="control report-filter" id="report-${key}" data-filter="${key}"><option value="">${label}</option>${choices.map((choice) => `<option value="${escapeHtml(choice.value)}">${escapeHtml(choice.label)}</option>`).join('')}</select>`;
+}
+
+function renderReportShell(options) {
+  const config = REPORTS[state.reportId];
+  mainContent.innerHTML = `
+    <section class="page-heading"><div><h2 id="reportTitle">${escapeHtml(config.title)}</h2><p id="reportDescription">${escapeHtml(config.description)}</p></div>
+      <div class="report-picker"><label for="reportSelect">Choose report</label><select class="control" id="reportSelect">${Object.entries(REPORTS).map(([key, report]) => `<option value="${escapeHtml(key)}"${key === state.reportId ? ' selected' : ''}>${escapeHtml(report.title)}</option>`).join('')}</select></div>
+    </section>
+    <section aria-label="Database reports"><div class="toolbar"><div class="toolbar-left" id="reportFilters">${config.filters.map((key) => renderReportFilter(key, options)).join('')}</div>
+      <div class="toolbar-right"><button class="button button-secondary button-small" type="button" data-action="refresh-report">↻ Refresh report</button></div></div>
+      <div id="reportTable" aria-live="polite"><div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading report…</div></div>
+    </section>`;
+}
+
+async function refreshReportRows() {
+  const requestId = ++state.reportRequest;
+  const config = REPORTS[state.reportId];
+  const container = document.getElementById('reportTable');
+  if (!config || !container) return;
+  container.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Querying Oracle…</div>';
+  const params = new URLSearchParams();
+  document.querySelectorAll('.report-filter').forEach((control) => {
+    if (control.value) params.set(control.dataset.filter, control.value);
+  });
+  params.set('page', String(state.reportPage));
+  params.set('page_size', String(state.pageSize));
+  try {
+    const payload = await apiEnvelope(`/api/reports/${encodeURIComponent(state.reportId)}?${params.toString()}`);
+    if (state.view !== 'reports' || requestId !== state.reportRequest || !document.getElementById('reportTable')) return;
+    state.reportPagination = payload.meta?.pagination || null;
+    container.innerHTML = renderReportTable(payload.data || [], config);
+  } catch (error) {
+    if (state.view !== 'reports' || requestId !== state.reportRequest) return;
+    container.innerHTML = `<div class="error-state"><strong>Report could not be loaded</strong><p>${escapeHtml(error.message)}</p><button class="button button-secondary button-small" type="button" data-action="refresh-report">Try again</button></div>`;
+  }
+}
+
+function renderReportTable(rows, config) {
+  if (!rows.length) {
+    return `<div class="empty-state"><span class="empty-icon" aria-hidden="true">▥</span><strong>No report rows</strong><span>No database records match this report and its filters.</span></div>${renderPagination(state.reportPagination, 'report')}`;
+  }
+  const head = config.columns.map((column) => `<th scope="col">${escapeHtml(column.label)}</th>`).join('');
+  const body = rows.map((row) => `<tr>${config.columns.map((column) => `<td>${renderCell(row[column.key], column, row)}</td>`).join('')}</tr>`).join('');
+  return `<div class="table-wrap"><table class="data-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${renderPagination(state.reportPagination, 'report')}`;
+}
+
+function renderModuleTable(rows, config) {
+  if (!rows.length) {
+    return `<div class="empty-state"><span class="empty-icon" aria-hidden="true">＋</span><strong>No ${escapeHtml(config.endpoint)} found</strong><span>Try a different search or add the first ${escapeHtml(config.singular)}.</span></div>${renderPagination(state.pagination, 'module')}`;
+  }
+  if (config.endpoint === 'appointments' && state.appointmentView === 'agenda') {
+    return `${renderAppointmentAgenda(rows, config)}${renderPagination(state.pagination, 'module')}`;
+  }
+  const headers = config.columns.map((column) => {
+    if (!column.sort) return `<th scope="col"${column.align === 'right' ? ' class="actions-head"' : ''}>${escapeHtml(column.label)}</th>`;
+    const active = state.sort === column.key;
+    const marker = active ? (state.direction === 'asc' ? '↑' : '↓') : '↕';
+    return `<th scope="col"><button class="sort-button" type="button" data-action="sort" data-sort="${escapeHtml(column.key)}" aria-label="Sort by ${escapeHtml(column.label)}">${escapeHtml(column.label)} <span class="sort-indicator" aria-hidden="true">${marker}</span></button></th>`;
+  }).join('');
+  const body = rows.map((row) => `<tr>${config.columns.map((column) => `<td${column.align === 'right' ? ' class="actions-head"' : ''}>${renderCell(row[column.key], column, row)}</td>`).join('')}<td class="actions-head"><div class="row-actions">${renderRowActions(state.view, config, row)}</div></td></tr>`).join('');
+  return `<div class="table-wrap"><table class="data-table"><thead><tr>${headers}<th scope="col" class="actions-head">Actions</th></tr></thead><tbody>${body}</tbody></table></div>${renderPagination(state.pagination, 'module')}`;
+}
+
+function renderPagination(info, context) {
+  if (!info) return '';
+  const start = info.total === 0 ? 0 : ((info.page - 1) * info.page_size) + 1;
+  const end = Math.min(info.total, info.page * info.page_size);
+  return `<div class="table-footer pagination-footer">
+    <span>Showing ${start}–${end} of ${info.total} records</span>
+    <div class="pagination-controls">
+      <label class="page-size-label">Rows <select class="control page-size-select" data-action="page-size" data-context="${context}" aria-label="Rows per page">${[10, 25, 50, 100].map((size) => `<option value="${size}"${info.page_size === size ? ' selected' : ''}>${size}</option>`).join('')}</select></label>
+      <button class="button button-secondary button-small" type="button" data-action="page" data-context="${context}" data-page="${Math.max(1, info.page - 1)}"${info.page <= 1 ? ' disabled' : ''} aria-label="Previous page">←</button>
+      <span class="page-indicator">Page ${info.page} of ${info.pages}</span>
+      <button class="button button-secondary button-small" type="button" data-action="page" data-context="${context}" data-page="${Math.min(info.pages, info.page + 1)}"${info.page >= info.pages ? ' disabled' : ''} aria-label="Next page">→</button>
+    </div>
+  </div>`;
+}
+
+function renderAppointmentAgenda(rows, config) {
+  const groups = new Map();
+  rows.forEach((row) => {
+    const key = String(row.appointment_date).slice(0, 10);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+  const cards = [...groups.entries()].sort(([first], [second]) => first.localeCompare(second)).map(([day, items]) => `
+    <section class="agenda-day"><header><h3>${escapeHtml(formatDate(day))}</h3><span>${items.length} ${items.length === 1 ? 'visit' : 'visits'}</span></header>
+      <div class="agenda-events">${items.sort((a, b) => String(a.appointment_time).localeCompare(String(b.appointment_time))).map((row) => `
+        <article class="agenda-event"><time>${escapeHtml(row.appointment_time)}</time><div class="agenda-event-copy"><strong>${escapeHtml(row.patient_name)}</strong><span>${escapeHtml(row.doctor_name)} · ${escapeHtml(row.department_name)}</span></div>${statusPill(row.status)}<div class="row-actions">${renderRowActions('appointments', config, row)}</div></article>`).join('')}</div>
+    </section>`).join('');
+  return `<div class="agenda-list" aria-label="Appointment agenda">${cards}</div>`;
+}
+
+function renderRowActions(view, config, row) {
+  const id = row[primaryKey(view)];
+  const safeId = escapeHtml(id);
+  const actions = [];
+  if (view === 'patients') {
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="details" data-id="${safeId}">History</button>`);
+  } else {
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="view-record" data-view="${escapeHtml(view)}" data-id="${safeId}">View</button>`);
+  }
+  if (view === 'admissions' && !row.discharge_date) {
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="move-room" data-id="${safeId}">Move room</button>`);
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="discharge" data-id="${safeId}">Discharge</button>`);
+  }
+  if (view === 'medicines') actions.push(`<button class="button button-secondary button-small" type="button" data-action="stock" data-id="${safeId}">Adjust stock</button>`);
+  if (view === 'appointments' && row.status === 'Scheduled') {
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="Completed" data-id="${safeId}">Complete</button>`);
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="appointment-status" data-status="Cancelled" data-id="${safeId}">Cancel</button>`);
+  }
+  if (!config.noEdit && (view !== 'appointments' || row.status === 'Scheduled')) {
+    actions.push(`<button class="button button-secondary button-small" type="button" data-action="edit" data-id="${safeId}">Edit</button>`);
+  }
+  if (!config.noDelete && view !== 'appointments' && (view !== 'admissions' || row.discharge_date)) {
+    actions.push(`<button class="button button-danger button-small" type="button" data-action="delete" data-id="${safeId}" aria-label="Delete ${escapeHtml(config.singular)}">Delete</button>`);
+  }
+  return actions.join('');
+}
+
+function renderCell(value, column, row = {}) {
+  if (column.key === 'admission_state') {
+    const status = row.discharge_date ? 'Discharged' : 'Active';
+    return `<span class="status-pill ${status === 'Active' ? 'status-available' : 'status-maintenance'}">${status}</span>`;
+  }
+  if (value === null || value === undefined || value === '') return '<span class="muted-value">—</span>';
+  if (column.format === 'date') return escapeHtml(formatDate(value));
+  if (column.format === 'month') return escapeHtml(formatMonth(value));
+  if (column.format === 'money') return `<strong>${escapeHtml(formatMoney(value))}</strong>`;
+  if (column.format === 'recordId') return `<span class="record-number">#${escapeHtml(String(value).padStart(4, '0'))}</span>`;
+  if (column.format === 'status') return statusPill(value);
+  if (column.format === 'gender') return escapeHtml(({ M: 'Male', F: 'Female', O: 'Other' })[value] || value);
+  if (column.format === 'stock') {
+    const low = Number(value) < 10;
+    return `<span class="stock-value${low ? ' stock-low' : ''}">${escapeHtml(value)}${low ? ' <span class="stock-warning">Low</span>' : ''}</span>`;
+  }
+  return column.strong ? `<strong>${escapeHtml(value)}</strong>` : escapeHtml(value);
+}
+
+function statusPill(value) {
+  const className = `status-${String(value).toLowerCase().replace(/[^a-z]+/g, '-')}`;
+  return `<span class="status-pill ${escapeHtml(className)}">${escapeHtml(value)}</span>`;
+}
+
+function formatMoney(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '—';
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(amount);
+}
+
+function formatDate(value) {
+  if (!value) return '—';
+  const datePart = String(value).slice(0, 10);
+  const parsed = new Date(`${datePart}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return escapeHtml(value);
+  return new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }).format(parsed);
+}
+
+function formatMonth(value) {
+  if (!value) return '—';
+  const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00`);
+  return Number.isNaN(parsed.getTime())
+    ? escapeHtml(value)
+    : new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric' }).format(parsed);
+}
+
+function renderLoadError(error, retry) {
+  mainContent.innerHTML = `<div class="error-state"><span class="empty-icon" aria-hidden="true">!</span><strong>Could not load hospital data</strong><p>${escapeHtml(error.message)}<br>Confirm the Oracle service is running and the local connection variables are set.</p><button class="button button-primary" type="button" data-action="retry">Try again</button></div>`;
+}
+
+function toast(message, kind = 'success') {
+  const item = document.createElement('div');
+  item.className = `toast${kind === 'error' ? ' error' : ''}`;
+  item.innerHTML = `<span class="toast-mark" aria-hidden="true">${kind === 'error' ? '!' : '✓'}</span><span>${escapeHtml(message)}</span>`;
+  toastRegion.appendChild(item);
+  window.setTimeout(() => item.remove(), 4800);
+}
+
+function resolveChoices(field, options, record) {
+  let choices = field.choices ? [...(CHOICES[field.choices] || [])] : [];
+  if (field.source) choices = (options[field.source] || []).map((option) => ({ value: option.id, label: option.label }));
+  if (field.key === 'availability_status') {
+    if (!record || record.availability_status !== 'Occupied') {
+      choices = choices.filter((choice) => choice.value !== 'Occupied');
+    } else if (!choices.some((choice) => choice.value === 'Occupied')) {
+      choices.push({ value: 'Occupied', label: 'Occupied (active admission)' });
+    }
+  }
+  return choices;
+}
+
+function fieldValue(field, record) {
+  if (record && record[field.key] !== undefined && record[field.key] !== null) return String(record[field.key]);
+  if (field.default !== undefined) return String(field.default);
+  if (field.key.endsWith('_date') || field.key === 'bill_date' || field.key === 'prescription_date') return todayLocal();
+  return '';
+}
+
+function renderField(field, options, record) {
+  const id = `form-${field.key}`;
+  const required = Boolean(field.required);
+  const label = `${escapeHtml(field.label)}${required ? ' <span class="required-mark" aria-hidden="true">*</span>' : ''}`;
+  const requiredAttr = required ? ' required' : '';
+  let control = '';
+  const value = fieldValue(field, record);
+  if (field.type === 'select' || field.type === 'related') {
+    const choices = resolveChoices(field, options, record);
+    const blank = `<option value=""${value === '' ? ' selected' : ''}>Select…</option>`;
+    const select = `<select class="form-control" id="${id}" name="${escapeHtml(field.key)}"${requiredAttr}>${blank}${choices.map((choice) => `<option value="${escapeHtml(choice.value)}"${String(choice.value) === value ? ' selected' : ''}>${escapeHtml(choice.label)}</option>`).join('')}</select>`;
+    control = field.type === 'related'
+      ? `<div class="related-select"><input class="form-control related-search" type="search" data-related-search="${id}" aria-label="Search ${escapeHtml(field.label)} options" placeholder="Type to filter ${escapeHtml(field.label.toLowerCase())}…">${select}</div>`
+      : select;
+  } else if (field.type === 'textarea') {
+    control = `<textarea class="form-control" id="${id}" name="${escapeHtml(field.key)}" maxlength="${field.maxLength || ''}" placeholder="${escapeHtml(field.placeholder || '')}"${requiredAttr}>${escapeHtml(value)}</textarea>`;
+  } else {
+    const type = field.type || 'text';
+    const extras = [
+      field.maxLength ? `maxlength="${field.maxLength}"` : '',
+      field.min !== undefined ? `min="${escapeHtml(field.min)}"` : '',
+      field.step ? `step="${escapeHtml(field.step)}"` : '',
+      field.placeholder ? `placeholder="${escapeHtml(field.placeholder)}"` : '',
+      type === 'date' && field.key === 'date_of_birth' ? `max="${todayLocal()}"` : '',
+      type === 'date' && field.key === 'appointment_date' && (!record || record.status === 'Scheduled') ? `min="${todayLocal()}"` : '',
+      type === 'date' && ['admission_date', 'prescription_date'].includes(field.key) ? `max="${todayLocal()}"` : '',
+    ].filter(Boolean).join(' ');
+    control = `<input class="form-control" type="${escapeHtml(type)}" id="${id}" name="${escapeHtml(field.key)}" value="${escapeHtml(value)}" ${extras}${requiredAttr}>`;
+  }
+  const hint = field.hint ? `<small class="field-hint">${escapeHtml(field.hint)}</small>` : '';
+  return `<div class="form-field${field.full ? ' full-width' : ''}"><label for="${id}">${label}</label>${control}${hint}</div>`;
+}
+
+async function openForm(view, record = null) {
+  modalReturnFocus = document.activeElement;
+  const config = MODULES[view];
+  try {
+    const options = await loadOptions(true);
+    const visibleFields = config.fields.filter((field) => !(view === 'medicines' && record && field.key === 'stock_quantity'));
+    const formFields = visibleFields.map((field) => renderField(field, options, record)).join('');
+    const totalPreview = view === 'bills' ? `<div class="form-field full-width"><div class="total-preview"><span>Calculated bill total</span><strong id="billTotalPreview">${escapeHtml(formatMoney(Number(record?.consultation_charge || 0) + Number(record?.room_charge || 0) + Number(record?.medicine_charge || 0)))}</strong></div><small class="field-hint">The Oracle database computes total_amount from the three charge components.</small></div>` : '';
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="formTitle"><header class="modal-header"><div><h2 id="formTitle">${record ? 'Edit' : 'Add'} ${escapeHtml(config.singular)}</h2><p>${record ? 'Update the selected record.' : 'Enter the details below. Related records are selected from the database.'}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header>
+      <div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="recordForm" data-module="${escapeHtml(view)}" data-id="${record ? escapeHtml(record[primaryKey(view)]) : ''}"><div class="form-grid">${formFields}${totalPreview}</div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button><button class="button button-secondary" type="reset">Reset</button><button class="button button-primary" type="submit">${record ? 'Save changes' : 'Create record'}</button></footer></form></div></section></div>`;
+    document.getElementById('modalRoot').querySelector('input,select,textarea')?.focus();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+function primaryKey(view) {
+  return ({ departments: 'department_id', doctors: 'doctor_id', patients: 'patient_id', appointments: 'appointment_id', rooms: 'room_id', admissions: 'admission_id', medicines: 'medicine_id', prescriptions: 'prescription_id', bills: 'bill_id' })[view];
+}
+
+async function openPatientHistory(patientId) {
+  modalReturnFocus = document.activeElement;
+  modalRoot.innerHTML = '<div class="modal-backdrop"><section class="modal-card modal-wide" role="dialog" aria-modal="true" aria-label="Patient record"><div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading patient history…</div></section></div>';
+  try {
+    const data = await apiRequest(`/api/patients/${patientId}/summary`);
+    const patient = data.patient;
+    const fields = [
+      ['Patient ID', `#${String(patient.patient_id).padStart(4, '0')}`], ['Name', patient.patient_name],
+      ['Date of birth', formatDate(patient.date_of_birth)], ['Gender', ({ M: 'Male', F: 'Female', O: 'Other' })[patient.gender] || patient.gender],
+      ['Phone', patient.phone || '—'], ['Blood group', patient.blood_group || '—'], ['Address', patient.address || '—'],
+    ];
+    const sections = [
+      ['Appointments', 'appointments', [{ key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'appointment_time', label: 'Time' }, { key: 'status', label: 'Status', format: 'status' }]],
+      ['Admissions', 'admissions', [{ key: 'room_number', label: 'Room' }, { key: 'admission_date', label: 'Admitted', format: 'date' }, { key: 'discharge_date', label: 'Discharged', format: 'date' }]],
+      ['Prescriptions', 'prescriptions', [{ key: 'medicine_name', label: 'Medicine' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'dosage', label: 'Dosage' }, { key: 'duration', label: 'Duration' }]],
+      ['Billing', 'bills', [{ key: 'bill_date', label: 'Date', format: 'date' }, { key: 'total_amount', label: 'Total', format: 'money' }, { key: 'payment_status', label: 'Payment', format: 'status' }]],
+    ];
+    const sectionHtml = sections.map(([title, key, columns]) => `<section class="detail-section"><div class="detail-section-header"><h3>${title}</h3><span class="field-hint">${(data[key] || []).length} records</span></div>${renderSimpleTable(data[key] || [], columns, `No ${title.toLowerCase()} on file.`)}</section>`).join('');
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="patientHistoryTitle"><header class="modal-header"><div><h2 id="patientHistoryTitle">Patient record</h2><p>Related clinical visits, admissions, prescriptions, and billing history.</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><article class="detail-card"><h3>${escapeHtml(patient.patient_name)}</h3><div class="detail-grid">${fields.map(([label, value]) => `<div class="detail-item"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join('')}</div></article>${sectionHtml}</div></section></div>`;
+  } catch (error) {
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-label="Patient record"><header class="modal-header"><h2>Patient record</h2><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="error-state"><strong>History could not be loaded</strong><p>${escapeHtml(error.message)}</p></div></section></div>`;
+  }
+}
+
+function formatDetailValue(key, value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (key.endsWith('_date') || key === 'date_of_birth') return formatDate(value);
+  if (key.includes('charge') || key === 'total_amount' || key === 'price') return formatMoney(value);
+  if (key === 'gender') return ({ M: 'Male', F: 'Female', O: 'Other' })[value] || value;
+  return String(value);
+}
+
+function openRecordDetails(view, recordId) {
+  modalReturnFocus = document.activeElement;
+  const config = MODULES[view];
+  modalRoot.innerHTML = '<div class="modal-backdrop"><section class="modal-card" role="dialog" aria-modal="true" aria-label="Record details"><div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading record details…</div></section></div>';
+  apiRequest(`/api/details/${encodeURIComponent(view)}/${encodeURIComponent(recordId)}`).then((payload) => {
+    const record = payload.record || {};
+    const related = payload.related || {};
+    const fields = Object.entries(record).map(([key, value]) => `
+      <div class="detail-item"><small>${escapeHtml(key.replaceAll('_', ' '))}</small><strong>${escapeHtml(formatDetailValue(key, value))}</strong></div>`).join('');
+    const relatedColumns = {
+      doctors: [{ key: 'doctor_name', label: 'Doctor' }, { key: 'specialization', label: 'Specialization' }, { key: 'department_name', label: 'Department' }],
+      appointments: [{ key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'appointment_time', label: 'Time' }, { key: 'patient_name', label: 'Patient' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'status', label: 'Status', format: 'status' }],
+      prescriptions: [{ key: 'prescription_date', label: 'Date', format: 'date' }, { key: 'patient_name', label: 'Patient' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'medicine_name', label: 'Medicine' }, { key: 'dosage', label: 'Dosage' }],
+      admissions: [{ key: 'patient_name', label: 'Patient' }, { key: 'room_number', label: 'Room' }, { key: 'admission_date', label: 'Admitted', format: 'date' }, { key: 'discharge_date', label: 'Discharged', format: 'date' }],
+    };
+    const sections = Object.entries(related).map(([name, rows]) => `
+      <section class="detail-section"><div class="detail-section-header"><h3>${escapeHtml(name[0].toUpperCase() + name.slice(1))}</h3><span class="field-hint">${rows.length} recent records</span></div>
+      ${renderSimpleTable(rows, relatedColumns[name] || Object.keys(rows[0] || {}).slice(0, 5).map((key) => ({ key, label: key.replaceAll('_', ' ') })), `No related ${name} found.`)}</section>`).join('');
+    const print = view === 'bills' ? '<button class="button button-primary" type="button" data-action="print-bill">Print bill</button>' : '';
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide bill-printable" role="dialog" aria-modal="true" aria-labelledby="recordDetailsTitle"><header class="modal-header"><div><h2 id="recordDetailsTitle">${escapeHtml(config.singular[0].toUpperCase() + config.singular.slice(1))} details</h2><p>Record values retrieved from the live API.</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header>
+      <div class="modal-body"><article class="detail-card"><h3>${escapeHtml(record[config.columns[0].key] ?? `Record #${recordId}`)}</h3><div class="detail-grid">${fields}</div></article>${sections}<footer class="modal-footer">${print}<button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
+  }).catch((error) => {
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-label="Record details"><header class="modal-header"><h2>Record details</h2><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="error-state"><strong>Details could not be loaded</strong><p>${escapeHtml(error.message)}</p></div></section></div>`;
+  });
+}
+
+function openStockAdjustment(medicineId) {
+  modalReturnFocus = document.activeElement;
+  const medicine = state.rows.find((item) => String(item.medicine_id) === String(medicineId));
+  if (!medicine) return;
+  modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="stockTitle"><header class="modal-header"><div><h2 id="stockTitle">Adjust medicine stock</h2><p>${escapeHtml(medicine.medicine_name)} · current balance ${escapeHtml(medicine.stock_quantity)}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="stockForm" data-id="${escapeHtml(medicineId)}"><div class="form-grid"><div class="form-field"><label for="stockChange">Quantity change</label><input class="form-control" id="stockChange" name="change" type="number" step="1" min="1" required placeholder="Enter units"></div><div class="form-field"><label for="stockDirection">Action</label><select class="form-control" id="stockDirection" name="stockDirection"><option value="add">Add stock</option><option value="remove">Remove / dispense stock</option></select></div><div class="form-field full-width"><small class="field-hint">Adjustments are atomic; Oracle prevents a balance below zero. Prescription creation alone never changes stock.</small></div></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button><button class="button button-primary" type="submit">Save adjustment</button></footer></form></div></section></div>`;
+  document.getElementById('stockChange').focus();
+}
+
+function openDischarge(admissionId) {
+  modalReturnFocus = document.activeElement;
+  const row = state.rows.find((item) => String(item.admission_id) === String(admissionId));
+  modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="dischargeTitle"><header class="modal-header"><div><h2 id="dischargeTitle">Discharge patient</h2><p>${escapeHtml(row?.patient_name || 'Patient')} · room ${escapeHtml(row?.room_number || '')}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="dischargeForm" data-id="${escapeHtml(admissionId)}"><div class="form-field"><label for="dischargeDate">Discharge date <span class="required-mark" aria-hidden="true">*</span></label><input class="form-control" id="dischargeDate" name="discharge_date" type="date" min="${escapeHtml(row?.admission_date || '')}" max="${todayLocal()}" value="${todayLocal()}" required><small class="field-hint">The Oracle trigger releases this room in the same transaction.</small></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button><button class="button button-primary" type="submit">Confirm discharge</button></footer></form></div></section></div>`;
+  document.getElementById('dischargeDate').focus();
+}
+
+async function openMoveRoom(admissionId) {
+  modalReturnFocus = document.activeElement;
+  const row = state.rows.find((item) => String(item.admission_id) === String(admissionId));
+  try {
+    const options = await loadOptions(true);
+    const availableRooms = options.available_rooms || [];
+    const roomChoices = availableRooms.map((room) => `<option value="${escapeHtml(room.id)}">${escapeHtml(room.label)}${room.room_type ? ` · ${escapeHtml(room.room_type)}` : ''}</option>`).join('');
+    const roomControl = availableRooms.length
+      ? `<select class="form-control" id="moveRoomSelect" name="room_id" required><option value="">Select an available room…</option>${roomChoices}</select>`
+      : '<div class="empty-state"><strong>No rooms available</strong><span>Discharge or free a room before moving this patient.</span></div>';
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="moveRoomTitle"><header class="modal-header"><div><h2 id="moveRoomTitle">Move patient to another room</h2><p>${escapeHtml(row?.patient_name || 'Patient')} · currently in ${escapeHtml(row?.room_number || 'unknown room')}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="moveRoomForm" data-id="${escapeHtml(admissionId)}"><div class="form-field">${availableRooms.length ? '<label for="moveRoomSelect">Available room <span class="required-mark" aria-hidden="true">*</span></label>' : ''}${roomControl}<small class="field-hint">The active stay remains open; Oracle moves the room occupancy in the same transaction.</small></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button>${availableRooms.length ? '<button class="button button-primary" type="submit">Move patient</button>' : ''}</footer></form></div></section></div>`;
+    if (availableRooms.length) document.getElementById('moveRoomSelect').focus();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+function closeModal() {
+  modalRoot.innerHTML = '';
+  if (modalReturnFocus && modalReturnFocus.isConnected) modalReturnFocus.focus();
+  modalReturnFocus = null;
+}
+
+function showFormError(message) {
+  const el = document.getElementById('formError');
+  if (!el) {
+    toast(message, 'error');
+    return;
+  }
+  el.textContent = message;
+  el.hidden = false;
+}
+
+async function submitRecordForm(form) {
+  const view = form.dataset.module;
+  const config = MODULES[view];
+  const payload = {};
+  config.fields.forEach((field) => {
+    const control = form.elements.namedItem(field.key);
+    if (control) payload[field.key] = control.value === '' ? null : control.value;
+  });
+  const id = form.dataset.id;
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  button.textContent = 'Saving…';
+  try {
+    await apiRequest(id ? `/api/${config.endpoint}/${id}` : `/api/${config.endpoint}`, {
+      method: id ? 'PUT' : 'POST', body: JSON.stringify(payload),
+    });
+    closeModal();
+    state.options = null;
+    state.page = 1;
+    toast(`${config.singular[0].toUpperCase()}${config.singular.slice(1)} ${id ? 'updated' : 'created'} successfully.`);
+    if (state.view === 'dashboard') await loadDashboard(); else await loadModule();
+    await checkConnection();
+  } catch (error) {
+    showFormError(error.message);
+    button.disabled = false;
+    button.textContent = id ? 'Save changes' : 'Create record';
+  }
+}
+
+async function changeAppointmentStatus(id, status) {
+  const prompt = status === 'Completed' ? 'Mark this scheduled appointment as completed?' : 'Cancel this scheduled appointment? The slot will be released for reuse.';
+  if (!window.confirm(prompt)) return;
+  try {
+    await apiRequest(`/api/appointments/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
+    toast(status === 'Completed' ? 'Appointment marked completed.' : 'Appointment cancelled; its slot is available.');
+    state.page = 1;
+    await refreshModuleRows();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function deleteRecord(id) {
+  const config = MODULES[state.view];
+  const row = state.rows.find((item) => String(item[primaryKey(state.view)]) === String(id));
+  const label = row?.[config.columns[0].key] || config.singular;
+  if (!window.confirm(`Delete this ${config.singular} record${label ? ` (${label})` : ''}? Related records are protected by database foreign keys.`)) return;
+  try {
+    await apiRequest(`/api/${config.endpoint}/${id}`, { method: 'DELETE' });
+    toast(`${config.singular[0].toUpperCase()}${config.singular.slice(1)} deleted.`);
+    state.options = null;
+    state.page = 1;
+    await loadModule();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function handleStockForm(form) {
+  const amount = Number(form.elements.namedItem('change').value);
+  const change = form.elements.namedItem('stockDirection').value === 'remove' ? -amount : amount;
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  button.textContent = 'Saving…';
+  try {
+    await apiRequest(`/api/medicines/${form.dataset.id}/stock-adjustments`, { method: 'POST', body: JSON.stringify({ change }) });
+    closeModal();
+    toast('Medicine stock updated.');
+    await loadModule();
+  } catch (error) {
+    showFormError(error.message);
+    button.disabled = false;
+    button.textContent = 'Save adjustment';
+  }
+}
+
+async function handleDischargeForm(form) {
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  button.textContent = 'Discharging…';
+  try {
+    await apiRequest(`/api/admissions/${form.dataset.id}/discharge`, {
+      method: 'POST', body: JSON.stringify({ discharge_date: form.elements.namedItem('discharge_date').value }),
+    });
+    closeModal();
+    toast('Patient discharged and room released.');
+    state.options = null;
+    await loadModule();
+  } catch (error) {
+    showFormError(error.message);
+    button.disabled = false;
+    button.textContent = 'Confirm discharge';
+  }
+}
+
+async function handleMoveRoomForm(form) {
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  button.textContent = 'Moving…';
+  try {
+    await apiRequest(`/api/admissions/${form.dataset.id}`, {
+      method: 'PUT', body: JSON.stringify({ room_id: form.elements.namedItem('room_id').value }),
+    });
+    closeModal();
+    toast('Patient moved; room occupancy updated.');
+    state.options = null;
+    await loadModule();
+  } catch (error) {
+    showFormError(error.message);
+    button.disabled = false;
+    button.textContent = 'Move patient';
+  }
+}
+
+function refreshConnectionDate() {
+  const date = new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).format(new Date());
+  document.getElementById('currentDate').textContent = date;
+}
+
+// Event delegation keeps controls functional after rendering fresh API responses.
+document.addEventListener('click', async (event) => {
+  const target = event.target.closest('[data-action]');
+  if (!target) return;
+  const action = target.dataset.action;
+  if (action === 'navigate') {
+    event.preventDefault();
+    navigate(target.dataset.view);
+  } else if (action === 'toggle-nav') {
+    const sidebar = document.getElementById('sidebar');
+    const open = sidebar.classList.toggle('open');
+    target.setAttribute('aria-expanded', String(open));
+  } else if (action === 'retry') {
+    if (state.view === 'dashboard') loadDashboard();
+    else if (state.view === 'reports') loadReports();
+    else loadModule();
+    checkConnection();
+  } else if (action === 'add') {
+    openForm(state.view);
+  } else if (action === 'refresh') {
+    await checkConnection();
+    if (state.view === 'dashboard') loadDashboard();
+    else if (state.view === 'reports') { state.options = null; loadReports(); }
+    else { state.options = null; await loadOptions(true).catch(() => {}); refreshModuleRows(); }
+  } else if (action === 'refresh-report') {
+    state.reportPage = 1;
+    refreshReportRows();
+  } else if (action === 'toggle-appointment-view') {
+    state.appointmentView = state.appointmentView === 'table' ? 'agenda' : 'table';
+    target.textContent = state.appointmentView === 'table' ? '▦ Agenda view' : '☷ Table view';
+    const container = document.getElementById('moduleTable');
+    if (container) container.innerHTML = renderModuleTable(state.rows, MODULES.appointments);
+  } else if (action === 'page') {
+    const page = Number(target.dataset.page);
+    if (target.dataset.context === 'report') {
+      state.reportPage = Math.max(1, page);
+      refreshReportRows();
+    } else {
+      state.page = Math.max(1, page);
+      refreshModuleRows();
+    }
+  } else if (action === 'appointment-status') {
+    changeAppointmentStatus(target.dataset.id, target.dataset.status);
+  } else if (action === 'view-record') {
+    openRecordDetails(target.dataset.view, target.dataset.id);
+  } else if (action === 'print-bill') {
+    window.print();
+  } else if (action === 'sort') {
+    const sort = target.dataset.sort;
+    if (state.sort === sort) state.direction = state.direction === 'asc' ? 'desc' : 'asc';
+    else { state.sort = sort; state.direction = 'asc'; }
+    state.page = 1;
+    refreshModuleRows();
+  } else if (action === 'edit') {
+    const id = target.dataset.id;
+    try {
+      const record = await apiRequest(`/api/${MODULES[state.view].endpoint}/${id}`);
+      openForm(state.view, record);
+    } catch (error) { toast(error.message, 'error'); }
+  } else if (action === 'delete') {
+    deleteRecord(target.dataset.id);
+  } else if (action === 'details') {
+    openPatientHistory(target.dataset.id);
+  } else if (action === 'stock') {
+    openStockAdjustment(target.dataset.id);
+  } else if (action === 'move-room') {
+    openMoveRoom(target.dataset.id);
+  } else if (action === 'discharge') {
+    openDischarge(target.dataset.id);
+  } else if (action === 'close-modal') {
+    closeModal();
+  } else if (action === 'backdrop-close' && event.target === target) {
+    closeModal();
+  }
+});
+
+document.addEventListener('input', (event) => {
+  if (event.target.matches('.related-search')) {
+    const select = document.getElementById(event.target.dataset.relatedSearch);
+    const query = event.target.value.trim().toLocaleLowerCase();
+    if (select) [...select.options].forEach((option, index) => {
+      option.hidden = index > 0 && !option.textContent.toLocaleLowerCase().includes(query);
+    });
+  }
+  if (event.target.id === 'moduleSearch') {
+    state.page = 1;
+    window.clearTimeout(state.searchTimer);
+    state.searchTimer = window.setTimeout(refreshModuleRows, 250);
+  }
+  if (event.target.closest('#recordForm') && state.view === 'bills') {
+    const form = event.target.closest('#recordForm');
+    const values = ['consultation_charge', 'room_charge', 'medicine_charge'].map((key) => Number(form.elements.namedItem(key)?.value || 0));
+    const preview = document.getElementById('billTotalPreview');
+    if (preview) preview.textContent = formatMoney(values.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0));
+  }
+});
+
+document.addEventListener('change', async (event) => {
+  if (event.target.matches('[data-action="page-size"]')) {
+    state.pageSize = Number(event.target.value) || 25;
+    if (event.target.dataset.context === 'report') {
+      state.reportPage = 1;
+      refreshReportRows();
+    } else {
+      state.page = 1;
+      refreshModuleRows();
+    }
+  } else if (event.target.id === 'reportSelect') {
+    state.reportId = event.target.value;
+    state.reportPage = 1;
+    const config = REPORTS[state.reportId];
+    document.getElementById('reportTitle').textContent = config.title;
+    document.getElementById('reportDescription').textContent = config.description;
+    const options = await loadOptions();
+    document.getElementById('reportFilters').innerHTML = config.filters.map((key) => renderReportFilter(key, options)).join('');
+    refreshReportRows();
+  } else if (event.target.classList.contains('module-filter')) {
+    state.page = 1;
+    refreshModuleRows();
+  } else if (event.target.classList.contains('report-filter')) {
+    state.reportPage = 1;
+    refreshReportRows();
+  }
+});
+
+document.addEventListener('reset', (event) => {
+  if (event.target.id !== 'recordForm') return;
+  window.setTimeout(() => {
+    event.target.querySelectorAll('.related-search').forEach((input) => {
+      input.value = '';
+      const select = document.getElementById(input.dataset.relatedSearch);
+      if (select) [...select.options].forEach((option) => { option.hidden = false; });
+    });
+    const preview = document.getElementById('billTotalPreview');
+    if (preview) {
+      const form = event.target;
+      const total = ['consultation_charge', 'room_charge', 'medicine_charge']
+        .reduce((sum, key) => sum + Number(form.elements.namedItem(key)?.value || 0), 0);
+      preview.textContent = formatMoney(total);
+    }
+  }, 0);
+});
+
+document.addEventListener('submit', (event) => {
+  const form = event.target;
+  if (form.id === 'recordForm') {
+    event.preventDefault();
+    submitRecordForm(form);
+  } else if (form.id === 'stockForm') {
+    event.preventDefault();
+    handleStockForm(form);
+  } else if (form.id === 'dischargeForm') {
+    event.preventDefault();
+    handleDischargeForm(form);
+  } else if (form.id === 'moveRoomForm') {
+    event.preventDefault();
+    handleMoveRoomForm(form);
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  const dialog = modalRoot.querySelector('[role="dialog"]');
+  if (!dialog) return;
+  if (event.key === 'Escape') {
+    closeModal();
+    return;
+  }
+  if (event.key === 'Tab') {
+    const focusable = [...dialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+      .filter((element) => !element.hidden);
+    if (!focusable.length) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+});
+
+window.addEventListener('popstate', () => {
+  const desired = location.hash.slice(1);
+  navigate(NAV_ITEMS.some((item) => item.id === desired) ? desired : 'dashboard', false);
+});
+
+refreshConnectionDate();
+renderNavigation();
+const initialView = location.hash.slice(1);
+navigate(NAV_ITEMS.some((item) => item.id === initialView) ? initialView : 'dashboard');
+checkConnection();
