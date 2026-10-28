@@ -87,12 +87,13 @@ const MODULES = {
   appointments: {
     title: 'Appointments', description: 'Book visits, manage the daily check-in queue, and preserve valid appointment history.',
     endpoint: 'appointments', addLabel: 'Book appointment', singular: 'appointment',
-    columns: [{ key: 'appointment_date', label: 'Date', format: 'date', sort: true }, { key: 'appointment_time', label: 'Time', sort: true }, { key: 'patient_name', label: 'Patient', strong: true, sort: true }, { key: 'doctor_name', label: 'Doctor', sort: true }, { key: 'department_name', label: 'Department' }, { key: 'status', label: 'Status', format: 'status', sort: true }],
+    columns: [{ key: 'appointment_date', label: 'Date', format: 'date', sort: true }, { key: 'appointment_time', label: 'Time', sort: true }, { key: 'duration_minutes', label: 'Minutes' }, { key: 'patient_name', label: 'Patient', strong: true, sort: true }, { key: 'doctor_name', label: 'Doctor', sort: true }, { key: 'department_name', label: 'Department' }, { key: 'status', label: 'Status', format: 'status', sort: true }],
     fields: [
       { key: 'patient_id', label: 'Patient', type: 'related', source: 'patients', required: true },
       { key: 'doctor_id', label: 'Doctor', type: 'related', source: 'doctors', required: true },
       { key: 'appointment_date', label: 'Appointment date', type: 'date', required: true },
       { key: 'appointment_time', label: 'Appointment time', type: 'time', required: true, hint: 'Use 24-hour time.' },
+      { key: 'duration_minutes', label: 'Duration (minutes)', type: 'number', required: true, min: '1', step: '1', default: '30', hint: 'Visits must end by midnight. Active visits cannot overlap for a doctor.' },
     ],
     filters: [
       { key: 'patient_id', label: 'All patients', source: 'patients' },
@@ -167,9 +168,9 @@ const MODULES = {
     noDelete: true,
   },
   bills: {
-    title: 'Billing', description: 'Generate bills with database-computed totals and track paid or outstanding balances.',
+    title: 'Billing', description: 'The register shows legacy charges and status. Open bill details for additional items and recorded payments.',
     endpoint: 'bills', addLabel: 'Create bill', singular: 'bill',
-    columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient', strong: true }, { key: 'bill_date', label: 'Bill date', format: 'date', sort: true }, { key: 'consultation_charge', label: 'Consultation', format: 'money' }, { key: 'room_charge', label: 'Room', format: 'money' }, { key: 'medicine_charge', label: 'Medicine', format: 'money' }, { key: 'total_amount', label: 'Total', format: 'money', sort: true }, { key: 'payment_status', label: 'Payment', format: 'status', sort: true }],
+    columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient', strong: true }, { key: 'bill_date', label: 'Bill date', format: 'date', sort: true }, { key: 'consultation_charge', label: 'Consultation', format: 'money' }, { key: 'room_charge', label: 'Room', format: 'money' }, { key: 'medicine_charge', label: 'Medicine', format: 'money' }, { key: 'total_amount', label: 'Legacy charges', format: 'money', sort: true }, { key: 'payment_status', label: 'Legacy status', format: 'status', sort: true }],
     fields: [
       { key: 'patient_id', label: 'Patient', type: 'related', source: 'patients', required: true },
       { key: 'bill_date', label: 'Bill date', type: 'date', required: true },
@@ -225,6 +226,12 @@ const REPORTS = {
     filters: ['patient_id', 'room_id', 'date_from', 'date_to'],
     columns: [{ key: 'patient_name', label: 'Patient' }, { key: 'room_number', label: 'Room' }, { key: 'admission_date', label: 'Admitted', format: 'date' }, { key: 'discharge_date', label: 'Discharged', format: 'date' }],
   },
+  'room-assignment-history': {
+    title: 'Room assignment history',
+    description: 'Room changes recorded by this version. Legacy assignment start and end times may be unknown.',
+    filters: ['patient_id', 'room_id'],
+    columns: [{ key: 'patient_name', label: 'Patient' }, { key: 'admission_id', label: 'Admission', format: 'recordId' }, { key: 'room_number', label: 'Room' }, { key: 'started_at', label: 'Recorded start' }, { key: 'ended_at', label: 'Recorded end' }, { key: 'is_active', label: 'Active' }, { key: 'source', label: 'Source' }],
+  },
   'room-occupancy': {
     title: 'Room availability summary',
     description: 'Room counts by current database availability status.',
@@ -244,20 +251,26 @@ const REPORTS = {
     columns: [{ key: 'prescription_date', label: 'Date', format: 'date' }, { key: 'patient_name', label: 'Patient' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'medicine_name', label: 'Medicine' }, { key: 'dosage', label: 'Dosage' }, { key: 'duration', label: 'Duration' }],
   },
   'patient-bills': {
-    title: 'Individual patient bills',
-    description: 'Bill components and Oracle-computed totals for selected patients and dates.',
+    title: 'Legacy patient bill categories',
+    description: 'Original bill categories and labels only; use Invoice balances for additional items and payments.',
     filters: ['patient_id', 'payment_status', 'date_from', 'date_to'],
     columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'bill_date', label: 'Date', format: 'date' }, { key: 'patient_name', label: 'Patient' }, { key: 'consultation_charge', label: 'Consultation', format: 'money' }, { key: 'room_charge', label: 'Room', format: 'money' }, { key: 'medicine_charge', label: 'Medicine', format: 'money' }, { key: 'total_amount', label: 'Total', format: 'money' }, { key: 'payment_status', label: 'Payment', format: 'status' }],
   },
+  'invoice-balances': {
+    title: 'Invoice balances and payments',
+    description: 'Legacy charge categories plus additional items, less recorded payments. Old Paid labels are not payments.',
+    filters: ['patient_id', 'date_from', 'date_to'],
+    columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient' }, { key: 'bill_date', label: 'Date', format: 'date' }, { key: 'legacy_charges', label: 'Legacy charges', format: 'money' }, { key: 'billed', label: 'Billed', format: 'money' }, { key: 'paid', label: 'Recorded payments', format: 'money' }, { key: 'balance', label: 'Balance', format: 'money' }],
+  },
   'billing-by-status': {
-    title: 'Paid and pending bills',
+    title: 'Legacy bill status (excludes ledger)',
     description: 'Bill counts and totals grouped by payment status; payment status changes do not double-count revenue.',
     filters: [],
     columns: [{ key: 'payment_status', label: 'Status', format: 'status' }, { key: 'bill_count', label: 'Bills' }, { key: 'total_amount', label: 'Total', format: 'money' }],
   },
   'monthly-revenue': {
-    title: 'Monthly revenue and outstanding balances',
-    description: 'Amounts are grouped by bill month and status. Collected totals mean bills marked Paid; there is no payment gateway.',
+    title: 'Legacy monthly bill status (excludes ledger)',
+    description: 'Amounts are grouped by bill date and the current Paid/Pending label. These are not payment transactions or verified receipts.',
     filters: ['date_from', 'date_to'],
     columns: [{ key: 'revenue_month', label: 'Month', format: 'month' }, { key: 'collected_total', label: 'Paid bills', format: 'money' }, { key: 'outstanding_total', label: 'Pending bills', format: 'money' }],
   },
@@ -450,7 +463,7 @@ function renderDashboard(data) {
     ['Occupied rooms', counts.occupied_rooms],
     ['Medicine catalogue', counts.total_medicines],
     ['Low-stock medicines', counts.low_stock_medicines],
-    ['Outstanding balance', formatMoney(data.outstanding_total)],
+    ['Legacy pending bill amounts', formatMoney(data.outstanding_total)],
     ['Bills marked Paid', formatMoney(data.collected_total)],
   ];
   const recent = data.recent_records || [];
@@ -476,7 +489,7 @@ function renderDashboard(data) {
         ], 'No upcoming appointments are scheduled.', 'Upcoming appointments')}</div>
       </article>
       <article class="panel">
-        <header class="panel-header"><div><h2 class="panel-title">Outstanding bills</h2><p class="panel-subtitle">Pending · ${escapeHtml(formatMoney(data.outstanding_total))} total</p></div><button class="panel-link" type="button" data-action="navigate" data-view="bills">View billing →</button></header>
+        <header class="panel-header"><div><h2 class="panel-title">Legacy pending bills</h2><p class="panel-subtitle">Pending · ${escapeHtml(formatMoney(data.outstanding_total))} total</p></div><button class="panel-link" type="button" data-action="navigate" data-view="bills">View billing →</button></header>
         <div class="panel-body">${renderSimpleTable(data.outstanding_bills || [], [
           { key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient', strong: true },
           { key: 'bill_date', label: 'Date', format: 'date' }, { key: 'total_amount', label: 'Amount', format: 'money' },
@@ -995,8 +1008,10 @@ async function openForm(view, record = null) {
   const config = MODULES[view];
   try {
     const options = await loadOptions(true);
-    const visibleFields = config.fields.filter((field) => !(view === 'medicines' && record && field.key === 'stock_quantity'));
-    const formFields = visibleFields.map((field) => renderField(field, options, record)).join('');
+    const visibleFields = config.fields.filter((field) => !(view === 'medicines' && record && field.key === 'stock_quantity') && !(record && ['bills', 'prescriptions'].includes(view) && field.key === 'patient_id'));
+    const ownerNotice = record && ['bills', 'prescriptions'].includes(view)
+      ? `<div class="form-field full-width"><strong>Patient: ${escapeHtml(record.patient_name || `#${record.patient_id}`)}</strong><small class="field-hint">Patient ownership cannot be changed after creation.</small></div>` : '';
+    const formFields = ownerNotice + visibleFields.map((field) => renderField(field, options, record)).join('');
     const totalPreview = view === 'bills' ? `<div class="form-field full-width"><div class="total-preview"><span>Calculated bill total</span><strong id="billTotalPreview">${escapeHtml(formatMoney(Number(record?.consultation_charge || 0) + Number(record?.room_charge || 0) + Number(record?.medicine_charge || 0)))}</strong></div><small class="field-hint">The Oracle database computes total_amount from the three charge components.</small></div>` : '';
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="formTitle"><header class="modal-header"><div><h2 id="formTitle">${record ? 'Edit' : 'Add'} ${escapeHtml(config.singular)}</h2><p>${record ? 'Update the selected record.' : 'Enter the details below. Related records are selected from the database.'}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header>
       <div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="recordForm" data-module="${escapeHtml(view)}" data-id="${record ? escapeHtml(record[primaryKey(view)]) : ''}"><div class="form-grid">${formFields}${totalPreview}</div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button><button class="button button-secondary" type="reset">Reset</button><button class="button button-primary" type="submit">${record ? 'Save changes' : 'Create record'}</button></footer></form></div></section></div>`;
@@ -1062,9 +1077,10 @@ function openRecordDetails(view, recordId) {
       appointments: [{ key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'appointment_time', label: 'Time' }, { key: 'patient_name', label: 'Patient' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'status', label: 'Status', format: 'status' }],
       prescriptions: [{ key: 'prescription_date', label: 'Date', format: 'date' }, { key: 'patient_name', label: 'Patient' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'medicine_name', label: 'Medicine' }, { key: 'dosage', label: 'Dosage' }],
       admissions: [{ key: 'patient_name', label: 'Patient' }, { key: 'room_number', label: 'Room' }, { key: 'admission_date', label: 'Admitted', format: 'date' }, { key: 'discharge_date', label: 'Discharged', format: 'date' }],
+      room_assignments: [{ key: 'room_number', label: 'Room' }, { key: 'started_at', label: 'Recorded start' }, { key: 'ended_at', label: 'Recorded end' }, { key: 'is_active', label: 'Active' }, { key: 'source', label: 'Source' }],
     };
     const sections = Object.entries(related).map(([name, rows]) => `
-      <section class="detail-section"><div class="detail-section-header"><h3>${escapeHtml(name[0].toUpperCase() + name.slice(1))}</h3><span class="field-hint">${rows.length} recent records</span></div>
+      <section class="detail-section"><div class="detail-section-header"><h3>${escapeHtml(name.replaceAll('_', ' '))}</h3><span class="field-hint">${rows.length} records${name === 'room_assignments' ? ' · legacy timestamps may be unknown' : ''}</span></div>
       ${renderSimpleTable(rows, relatedColumns[name] || Object.keys(rows[0] || {}).slice(0, 5).map((key) => ({ key, label: key.replaceAll('_', ' ') })), `No related ${name} found.`)}</section>`).join('');
     let recordTitle;
     if (view === 'bills') {
@@ -1079,13 +1095,38 @@ function openRecordDetails(view, recordId) {
       recordTitle = record[config.columns[0].key] ?? `${config.singular} #${recordId}`;
     }
     const print = view === 'bills' ? '<button class="button button-primary" type="button" data-action="print-bill">Print bill</button>' : '';
+    const ledger = view === 'bills' ? `<button class="button button-secondary" type="button" data-action="open-ledger" data-id="${escapeHtml(recordId)}">Items and payments</button>` : '';
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide bill-printable" role="dialog" aria-modal="true" aria-labelledby="recordDetailsTitle"><header class="modal-header"><div><h2 id="recordDetailsTitle">${escapeHtml(config.singular[0].toUpperCase() + config.singular.slice(1))} details</h2><p>Record values returned by the database-backed API.</p></div><div class="print-actions">${view === 'bills' ? '<button class="button button-primary button-small" type="button" data-action="print-bill">Print bill</button>' : ''}<button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></div></header>
-      <div class="modal-body"><article class="detail-card"><h3>${escapeHtml(recordTitle)}</h3><div class="detail-grid">${fields}</div></article>${sections}<footer class="modal-footer">${print}<button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
+      <div class="modal-body"><article class="detail-card"><h3>${escapeHtml(recordTitle)}</h3><div class="detail-grid">${fields}</div></article>${sections}<footer class="modal-footer">${ledger}${print}<button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
     focusModal();
   }).catch((error) => {
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-label="Record details"><header class="modal-header"><h2>Record details</h2><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="error-state"><strong>Details could not be loaded</strong><p>${escapeHtml(error.message)}</p></div></section></div>`;
     focusModal();
   });
+}
+
+async function openLedger(billId) {
+  try {
+    const data = await apiRequest(`/api/bills/${encodeURIComponent(billId)}/ledger`);
+    const items = data.items.map((item) => `<tr><td>${escapeHtml(item.description)}</td><td>${escapeHtml(item.quantity)}</td><td>${escapeHtml(formatMoney(item.unit_price))}</td><td>${escapeHtml(formatMoney(item.line_total))}</td><td>${data.paid === 0 ? `<button type="button" data-action="edit-bill-item" data-id="${escapeHtml(item.item_id)}" data-description="${escapeHtml(item.description)}" data-quantity="${escapeHtml(item.quantity)}" data-price="${escapeHtml(item.unit_price)}">Edit</button> <button type="button" data-action="delete-bill-item" data-bill="${escapeHtml(billId)}" data-id="${escapeHtml(item.item_id)}">Remove</button>` : ''}</td></tr>`).join('');
+    const payments = data.payments.map((p) => `<tr><td>${escapeHtml(p.recorded_at)}</td><td>${escapeHtml(p.payment_method)}</td><td>${escapeHtml(p.reference || '—')}</td><td>${escapeHtml(formatMoney(p.amount))}</td></tr>`).join('');
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="ledgerTitle"><header class="modal-header"><div><h2 id="ledgerTitle">Bill #${escapeHtml(billId)} items and payments</h2><p>Legacy charge basis ${escapeHtml(formatMoney(data.legacy_charge_total))}; old status ${escapeHtml(data.legacy_status)} is not a payment record.</p></div><button class="icon-button" type="button" data-action="close-modal" aria-label="Close">×</button></header><div class="modal-body"><p><strong>Billed ${escapeHtml(formatMoney(data.billed))} · Paid ${escapeHtml(formatMoney(data.paid))} · Outstanding ${escapeHtml(formatMoney(data.balance))} · ${escapeHtml(data.status)}</strong></p><div id="formError" class="form-error" role="alert" hidden></div><h3>Additional invoice items</h3><div class="table-scroll"><table><thead><tr><th>Description</th><th>Quantity</th><th>Unit price</th><th>Total</th><th></th></tr></thead><tbody>${items || '<tr><td colspan="5">No additional items.</td></tr>'}</tbody></table></div>${data.paid === 0 ? `<form id="billItemForm" data-id="${escapeHtml(billId)}"><div class="form-grid"><div class="form-field"><label for="itemDescription">Description</label><input class="form-control" id="itemDescription" name="description" maxlength="200" required></div><div class="form-field"><label for="itemQuantity">Quantity</label><input class="form-control" id="itemQuantity" name="quantity" type="number" min="1" max="99999999" step="1" required></div><div class="form-field"><label for="itemPrice">Unit price</label><input class="form-control" id="itemPrice" name="unit_price" type="number" min="0" step="0.01" required></div></div><button class="button button-primary" type="submit">Add item</button></form>` : '<p>Charges are locked after a payment is recorded.</p>'}<h3>Payment history</h3><div class="table-scroll"><table><thead><tr><th>Recorded</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${payments || '<tr><td colspan="4">No recorded payments.</td></tr>'}</tbody></table></div>${data.balance > 0 ? `<form id="billPaymentForm" data-id="${escapeHtml(billId)}"><input type="hidden" name="idempotency_key" value="${escapeHtml(crypto.randomUUID())}"><div class="form-grid"><div class="form-field"><label for="paymentAmount">Amount</label><input class="form-control" id="paymentAmount" name="amount" type="number" min="0.01" max="${escapeHtml(data.balance)}" step="0.01" required></div><div class="form-field"><label for="paymentMethod">Method</label><select class="form-control" id="paymentMethod" name="payment_method"><option>Cash</option><option>Card</option><option>Transfer</option><option>Other</option></select></div><div class="form-field"><label for="paymentReference">Reference (optional)</label><input class="form-control" id="paymentReference" name="reference" maxlength="100"></div></div><button class="button button-primary" type="submit">Record payment</button></form>` : ''}</div></section></div>`;
+    focusModal();
+    return true;
+  } catch (error) { toast(error.message, 'error'); return false; }
+}
+
+async function submitLedgerForm(form) {
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  const billId = form.dataset.id;
+  const payload = Object.fromEntries(new FormData(form).entries());
+  try {
+    const editing = form.id === 'billItemForm' && form.dataset.itemId;
+    const path = `/api/bills/${encodeURIComponent(billId)}/${form.id === 'billItemForm' ? 'items' : 'payments'}${editing ? `/${encodeURIComponent(editing)}` : ''}`;
+    await apiRequest(path, { method: editing ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+    if (await openLedger(billId)) toast('Record saved.');
+  } catch (error) { showFormError(error.message); button.disabled = false; }
 }
 
 function openStockAdjustment(medicineId) {
@@ -1391,6 +1432,13 @@ document.addEventListener('click', async (event) => {
     deleteRecord(target.dataset.id);
   } else if (action === 'details') {
     openPatientHistory(target.dataset.id);
+  } else if (action === 'open-ledger') {
+    openLedger(target.dataset.id);
+  } else if (action === 'edit-bill-item') {
+    const form = document.getElementById('billItemForm');
+    if (form) { form.dataset.itemId = target.dataset.id; form.elements.description.value = target.dataset.description; form.elements.quantity.value = target.dataset.quantity; form.elements.unit_price.value = target.dataset.price; form.querySelector('button[type=submit]').textContent = 'Save item'; form.elements.description.focus(); }
+  } else if (action === 'delete-bill-item') {
+    apiRequest(`/api/bills/${encodeURIComponent(target.dataset.bill)}/items/${encodeURIComponent(target.dataset.id)}`, { method: 'DELETE' }).then(() => openLedger(target.dataset.bill)).catch((error) => showFormError(error.message));
   } else if (action === 'stock') {
     openStockAdjustment(target.dataset.id);
   } else if (action === 'move-room') {
@@ -1502,7 +1550,10 @@ document.addEventListener('reset', (event) => {
 
 document.addEventListener('submit', (event) => {
   const form = event.target;
-  if (form.id === 'recordForm') {
+  if (form.id === 'billItemForm' || form.id === 'billPaymentForm') {
+    event.preventDefault();
+    submitLedgerForm(form);
+  } else if (form.id === 'recordForm') {
     event.preventDefault();
     submitRecordForm(form);
   } else if (form.id === 'stockForm') {

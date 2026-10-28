@@ -103,6 +103,13 @@ SELECT a.admission_id, p.patient_name, r.room_number, a.admission_date, a.discha
   JOIN Room r ON r.room_id = a.room_id
  ORDER BY a.admission_date DESC, a.admission_id DESC;
 
+PROMPT --- Room assignment observations (legacy times may be unknown) ---
+SELECT s.stay_id, a.admission_id, p.patient_name, r.room_number,
+       s.started_at, s.ended_at, s.is_active, s.source
+  FROM Admission_Room_Stay s JOIN Admission a ON a.admission_id = s.admission_id
+  JOIN Patient p ON p.patient_id = a.patient_id JOIN Room r ON r.room_id = s.room_id
+ ORDER BY s.stay_id;
+
 PROMPT --- Room availability ---
 SELECT room_number, room_type, availability_status
   FROM Room

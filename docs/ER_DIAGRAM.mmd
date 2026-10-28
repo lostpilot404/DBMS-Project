@@ -29,6 +29,7 @@ erDiagram
         NUMBER doctor_id FK
         DATE appointment_date
         VARCHAR2 appointment_time
+        NUMBER duration_minutes
         VARCHAR2 status
     }
     ROOM {
@@ -43,6 +44,16 @@ erDiagram
         NUMBER room_id FK
         DATE admission_date
         DATE discharge_date
+    }
+    ADMISSION_ROOM_STAY {
+        NUMBER stay_id PK
+        NUMBER admission_id FK
+        NUMBER room_id FK
+        TIMESTAMP started_at
+        TIMESTAMP ended_at
+        CHAR is_active
+        VARCHAR2 source
+        TIMESTAMP recorded_at
     }
     MEDICINE {
         NUMBER medicine_id PK
@@ -71,11 +82,33 @@ erDiagram
         VARCHAR2 payment_status
     }
 
+    BILL_ITEM {
+        NUMBER item_id PK
+        NUMBER bill_id FK
+        VARCHAR2 description
+        NUMBER quantity
+        NUMBER unit_price
+        NUMBER line_total
+    }
+    BILL_PAYMENT {
+        NUMBER payment_id PK
+        NUMBER bill_id FK
+        NUMBER amount
+        VARCHAR2 payment_method
+        VARCHAR2 reference
+        VARCHAR2 idempotency_key UK
+        TIMESTAMP recorded_at
+    }
+    BILL ||--o{ BILL_ITEM : contains
+    BILL ||--o{ BILL_PAYMENT : receives
+
     DEPARTMENT ||--o{ DOCTOR : assigns
     PATIENT ||--o{ APPOINTMENT : books
     DOCTOR ||--o{ APPOINTMENT : attends
     PATIENT ||--o{ ADMISSION : has
-    ROOM ||--o{ ADMISSION : assigned_to
+    ROOM ||--o{ ADMISSION : current_or_last_room
+    ADMISSION ||--o{ ADMISSION_ROOM_STAY : records
+    ROOM ||--o{ ADMISSION_ROOM_STAY : assigned
     PATIENT ||--o{ PRESCRIPTION : receives
     DOCTOR ||--o{ PRESCRIPTION : writes
     MEDICINE ||--o{ PRESCRIPTION : names

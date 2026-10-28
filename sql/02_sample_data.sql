@@ -209,14 +209,27 @@ SELECT p.patient_id, r.room_id, TRUNC(SYSDATE) - 1
                     WHERE a.patient_id = p.patient_id AND a.discharge_date IS NULL)
    AND NOT EXISTS (SELECT 1 FROM Admission a
                     WHERE a.room_id = r.room_id AND a.discharge_date IS NULL);
-INSERT INTO Admission (patient_id, room_id, admission_date, discharge_date)
-SELECT p.patient_id, r.room_id, TRUNC(SYSDATE) - 10, TRUNC(SYSDATE) - 7
-  FROM Patient p CROSS JOIN Room r
- WHERE p.phone = '+91-90001-20006' AND r.room_number = 'R-102'
-   AND NOT EXISTS (SELECT 1 FROM Admission a
-                    WHERE a.patient_id = p.patient_id
-                      AND a.admission_date = TRUNC(SYSDATE) - 10
-                      AND a.room_id = r.room_id);
+-- Historical demo: create an active admission then discharge in the same
+-- transaction. Skip if the room/patient is currently in use or row exists.
+DECLARE
+    v_patient Patient.patient_id%TYPE;
+    v_room Room.room_id%TYPE;
+    v_admission Admission.admission_id%TYPE;
+BEGIN
+    SELECT p.patient_id, r.room_id INTO v_patient, v_room
+      FROM Patient p CROSS JOIN Room r
+     WHERE p.phone = '+91-90001-20006' AND r.room_number = 'R-102'
+       AND r.availability_status = 'Available'
+       AND NOT EXISTS (SELECT 1 FROM Admission a WHERE a.patient_id = p.patient_id
+                        AND (a.discharge_date IS NULL OR
+                             (a.admission_date = TRUNC(SYSDATE) - 10 AND a.room_id = r.room_id)))
+       AND NOT EXISTS (SELECT 1 FROM Admission a WHERE a.room_id = r.room_id AND a.discharge_date IS NULL);
+    INSERT INTO Admission (patient_id, room_id, admission_date)
+    VALUES (v_patient, v_room, TRUNC(SYSDATE) - 10) RETURNING admission_id INTO v_admission;
+    UPDATE Admission SET discharge_date = TRUNC(SYSDATE) - 7 WHERE admission_id = v_admission;
+EXCEPTION WHEN NO_DATA_FOUND THEN NULL;
+END;
+/
 
 -- Prescription records are clinical instructions only; creating one does not dispense stock.
 INSERT INTO Prescription (patient_id, doctor_id, medicine_id, dosage, duration, prescription_date)

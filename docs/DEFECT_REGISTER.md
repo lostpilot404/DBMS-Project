@@ -1,0 +1,24 @@
+# Defect register
+
+Evidence is source paths/lines or repeatable Flask test-client experiments, not Oracle/browser proof. P0 is severity *if exposed to real patient data*, not a claim of observed breach.
+
+| ID / priority | Evidence, root cause and impact | Remediation / retest |
+|---|---|---|
+| D01 P0 | `hms/__init__.py`, `hms/api.py`: no authentication/authorization/audit; all client-accessible patient data and mutations are unrestricted. Real deployment would expose sensitive information. | OPEN. Controlled synthetic local use only; proper identity, roles, audit, network and privacy design required. |
+| D02 P1 | `record` generic PUT accepts Bill and Prescription `patient_id`, and other historical fields. Test-client + fake DB: PUT `/api/bills/1` with `{"patient_id":2}` returned 200 and executed `UPDATE Bill SET patient_id...`. This allows cross-patient reassignment and payment/charge rewriting; no persisted Oracle observation. | PARTIAL: API rejects any `patient_id` on bill/prescription PUT before SQL; UI omits it; proposed Oracle triggers and upgrade `sql/migrations/001_patient_ownership.sql` have not been run. Fake API regression confirms rejection and permitted edits; Oracle integration test skipped. Other edits to historical charges/clinical fields remain possible; no correction/void workflow. |
+| D03 P1 | Admission transfer updates `room_id` in place; prior occupancy is lost, reports now show the last room for the whole stay (`hms/api.py`, `sql/01_create_schema.sql`). | OPEN. Room-stay ledger and migration needed; cannot reconstruct erased history. |
+| D04 P1 | Direct SQL can set Room status independently; admission trigger permits already-discharged insert, history rewrite and reopening. API originally accepted POST admission with future discharge and returned 201 with fake DB, bypassing discharge action and room occupancy. | PARTIAL: API rejects non-null discharge at creation; `test_new_admission_cannot_bypass_discharge_workflow` checks same-day/future input and active create with fake DB. Direct Oracle writes and actual room effects remain untested/unfixed. |
+| D05 P1 | Exact slot uniqueness does not prevent overlap; no duration (`Appointment` DDL). Terminal status releases slot even for same time. | OPEN: define duration/locking rules before scheduling claims. |
+| D06 P1 | A Paid flag is freely editable, with no payment events or paid date. Dashboard/monthly revenue sum current paid amounts by *bill date*, not receipts. | OPEN; label as status-based estimate, not actual cash accounting. Normalize only with defined requirements and migration. |
+| D07 P2 | Unique optional patient phone blocks shared numbers and cannot reliably prevent duplicate registrations; nullable/case-sensitive names leave other duplicates. | OPEN; identity matching requires policy and review, no automatic merge. |
+| D08 P2 | Future DOB, admission, prescription, bill and discharge dates are API-only checks using application clock; direct DML bypasses, differing DB timezone changes rules. | OPEN; decide authoritative timezone and database enforcement; Oracle not tested. |
+| D09 P2 | SQL reports and CSV use live joins; historical department/name changes alter reports. `LISTAGG` department listing can exceed Oracle string limit on large groups. | OPEN; snapshots or historical dimensions need scope decision; test target Oracle versions. |
+| D10 P2 | `sql/02_sample_data.sql` claims repeat-safe, but relative-date keys can create additional rows across days and `NOT EXISTS` does not serialize concurrent seed runs. Oracle DDL commits implicitly; `WHENEVER ... ROLLBACK` cannot make schema setup atomic. | OPEN; use fresh disposable schema, review errors; never run as reset. |
+
+## Continuation verification
+
+D02 was independently reproduced with fake DB: bill and prescription PUT of patient 9999999999 each returned 200 and issued UPDATE before the fix. After the fix the focused fake regression rejects both before any SQL, including requests that also contain a valid edit. D04 same-day/future pre-discharged inserts, repeated discharge, future discharge and simulated trigger rollback are exercised in fake tests; actual occupancy, rollback and direct DML remain unverified. D03 remains open; [draft design](ROOM_HISTORY_DESIGN.md) is not an implemented migration. D05 duration conflicts and D06 payment history remain open. No live Oracle or browser results are implied.
+
+## Room history implementation continuation
+
+D03: implementation added `Admission_Room_Stay`, sync trigger, admission details, patient endpoint, report and migration 002; Oracle execution, backfill, transfer concurrency and real rollback are NOT TESTED. Prior transfer history is unrecoverable. Direct Room/history writes can bypass synchronization, so integrity remains PARTIAL. D04 lifecycle trigger was tightened, but direct status mutation still remains. D05 overlapping durations and D06 payment history remain OPEN.

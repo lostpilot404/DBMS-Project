@@ -116,7 +116,7 @@ RESOURCES: dict[str, dict[str, Any]] = {
                   "p.patient_name AS patient_name, a.doctor_id AS doctor_id, "
                   "d.doctor_name AS doctor_name, dep.department_name AS department_name, "
                   "a.appointment_date AS appointment_date, a.appointment_time AS appointment_time, "
-                  "a.status AS status FROM Appointment a "
+                  "a.duration_minutes AS duration_minutes, a.status AS status FROM Appointment a "
                   "JOIN Patient p ON p.patient_id = a.patient_id "
                   "JOIN Doctor d ON d.doctor_id = a.doctor_id "
                   "JOIN Department dep ON dep.department_id = d.department_id",
@@ -130,6 +130,7 @@ RESOURCES: dict[str, dict[str, Any]] = {
             "doctor_id": _field("id", required=True, nullable=False),
             "appointment_date": _field("date", required=True, nullable=False),
             "appointment_time": _field("time", required=True, nullable=False),
+            "duration_minutes": _field("duration", required=True, default=30, nullable=False),
             "status": _field("choice", required=True, choices=APPOINTMENT_STATUSES, default="Scheduled", nullable=False),
         },
     },
@@ -300,6 +301,17 @@ REPORTS: dict[str, dict[str, Any]] = {
         "filters": {"patient_id": ("a.patient_id", "id"), "room_id": ("a.room_id", "id")},
         "date_column": "a.admission_date",
     },
+    "room-assignment-history": {
+        "select": "SELECT s.stay_id AS stay_id, a.admission_id AS admission_id, "
+                  "p.patient_id AS patient_id, p.patient_name AS patient_name, "
+                  "r.room_id AS room_id, r.room_number AS room_number, "
+                  "s.started_at AS started_at, s.ended_at AS ended_at, "
+                  "s.is_active AS is_active, s.source AS source "
+                  "FROM Admission_Room_Stay s JOIN Admission a ON a.admission_id = s.admission_id "
+                  "JOIN Patient p ON p.patient_id = a.patient_id JOIN Room r ON r.room_id = s.room_id",
+        "order": "stay_id DESC",
+        "filters": {"patient_id": ("a.patient_id", "id"), "room_id": ("s.room_id", "id")},
+    },
     "room-occupancy": {
         "select": "SELECT r.availability_status AS availability_status, COUNT(*) AS room_count "
                   "FROM Room r",
@@ -340,6 +352,18 @@ REPORTS: dict[str, dict[str, Any]] = {
                   "JOIN Patient p ON p.patient_id = b.patient_id",
         "order": "bill_date DESC, bill_id DESC",
         "filters": {"patient_id": ("b.patient_id", "id"), "payment_status": ("b.payment_status", "bill_status")},
+        "date_column": "b.bill_date",
+    },
+    "invoice-balances": {
+        "select": "SELECT b.bill_id AS bill_id, b.patient_id AS patient_id, p.patient_name AS patient_name, "
+                  "b.bill_date AS bill_date, b.total_amount AS legacy_charges, "
+                  "b.total_amount + NVL(i.item_total, 0) AS billed, NVL(pay.paid_total, 0) AS paid, "
+                  "b.total_amount + NVL(i.item_total, 0) - NVL(pay.paid_total, 0) AS balance "
+                  "FROM Bill b JOIN Patient p ON p.patient_id = b.patient_id "
+                  "LEFT JOIN (SELECT bill_id, SUM(line_total) AS item_total FROM Bill_Item GROUP BY bill_id) i ON i.bill_id = b.bill_id "
+                  "LEFT JOIN (SELECT bill_id, SUM(amount) AS paid_total FROM Bill_Payment GROUP BY bill_id) pay ON pay.bill_id = b.bill_id",
+        "order": "bill_date DESC, bill_id DESC",
+        "filters": {"patient_id": ("b.patient_id", "id")},
         "date_column": "b.bill_date",
     },
     "billing-by-status": {
@@ -491,8 +515,10 @@ def options():
             cursor.execute("SELECT patient_id AS id, patient_name AS label FROM Patient ORDER BY patient_name")
             patients = _fetch_rows(cursor)
             cursor.execute(
-                "SELECT room_id AS id, room_number AS label, room_type AS room_type "
-                "FROM Room WHERE availability_status = 'Available' ORDER BY room_number"
+                "SELECT r.room_id AS id, r.room_number AS label, r.room_type AS room_type "
+                "FROM Room r WHERE r.availability_status = 'Available' "
+                "AND NOT EXISTS (SELECT 1 FROM Admission_Room_Stay s WHERE s.room_id = r.room_id AND s.is_active = 'Y') "
+                "ORDER BY r.room_number"
             )
             available_rooms = _fetch_rows(cursor)
             cursor.execute("SELECT room_id AS id, room_number AS label FROM Room ORDER BY room_number")
@@ -535,6 +561,25 @@ def report_csv(report_name: str):
     response.headers["Content-Disposition"] = f'attachment; filename="{report_name}.csv"'
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@api.get("/api/patients/<int:patient_id>/room-history")
+def patient_room_history(patient_id: int):
+    with _db().connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT patient_id FROM Patient WHERE patient_id = :patient_id", {"patient_id": patient_id})
+            if cursor.fetchone() is None:
+                raise ApiError("Patient not found.", 404, "not_found")
+            cursor.execute(
+                "SELECT s.stay_id AS stay_id, s.admission_id AS admission_id, s.room_id AS room_id, "
+                "r.room_number AS room_number, s.started_at AS started_at, s.ended_at AS ended_at, "
+                "s.is_active AS is_active, s.source AS source, s.recorded_at AS recorded_at "
+                "FROM Admission_Room_Stay s JOIN Admission a ON a.admission_id = s.admission_id "
+                "JOIN Room r ON r.room_id = s.room_id WHERE a.patient_id = :patient_id "
+                "ORDER BY s.stay_id", {"patient_id": patient_id},
+            )
+            rows = _fetch_rows(cursor)
+    return jsonify({"data": rows})
 
 
 @api.get("/api/patients/<int:patient_id>/summary")
@@ -708,6 +753,16 @@ def resource_details(resource_name: str, record_id: int):
                     {"record_id": record_id},
                 )
                 related["prescriptions"] = _fetch_rows(cursor)
+            elif resource_name == "admissions":
+                cursor.execute(
+                    "SELECT s.stay_id AS stay_id, s.room_id AS room_id, r.room_number AS room_number, "
+                    "s.started_at AS started_at, s.ended_at AS ended_at, s.is_active AS is_active, "
+                    "s.source AS source, s.recorded_at AS recorded_at "
+                    "FROM Admission_Room_Stay s JOIN Room r ON r.room_id = s.room_id "
+                    "WHERE s.admission_id = :record_id ORDER BY s.stay_id",
+                    {"record_id": record_id},
+                )
+                related["room_assignments"] = _fetch_rows(cursor)
             elif resource_name == "rooms":
                 cursor.execute(
                     RESOURCES["admissions"]["select"] + " WHERE a.room_id = :record_id "
@@ -739,6 +794,8 @@ def collection(resource_name: str):
     values = _validate_payload(spec, payload, partial=False)
     if resource_name == "rooms" and values.get("availability_status") == "Occupied":
         raise ApiError("Rooms are marked Occupied when an active admission is created.", 400)
+    if resource_name == "admissions" and values.get("discharge_date") is not None:
+        raise ApiError("New admissions must be active; use the discharge action to discharge a patient.")
     if resource_name == "appointments":
         if values.get("status") != "Scheduled":
             raise ApiError("New appointments must start as Scheduled; use the appointment workflow for status changes.")
@@ -748,6 +805,8 @@ def collection(resource_name: str):
     sql = f"INSERT INTO {spec['table']} ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
     with _transaction(_db()) as connection:
         with connection.cursor() as cursor:
+            if resource_name == "appointments":
+                _check_doctor_slot(cursor, values, None)
             out_id = cursor.var(int)
             binds = dict(values)
             binds["out_id"] = out_id
@@ -769,6 +828,10 @@ def record(resource_name: str, record_id: int):
 
     if request.method == "PUT":
         payload = _request_json()
+        # Ownership is established at creation, never through an ordinary edit.
+        # Reject even unchanged IDs: clients must omit the field on updates.
+        if resource_name in ("bills", "prescriptions") and "patient_id" in payload:
+            raise ApiError("Patient ownership cannot be changed when editing this record.", 409, "patient_ownership_immutable")
         values = _validate_payload(spec, payload, partial=True)
         if not values:
             raise ApiError("Provide at least one field to update.")
@@ -800,6 +863,10 @@ def record(resource_name: str, record_id: int):
             binds["record_id"] = record_id
             with _transaction(_db()) as connection:
                 with connection.cursor() as cursor:
+                    if resource_name == "bills" and set(values) & {"consultation_charge", "room_charge", "medicine_charge"}:
+                        base = _lock_bill(cursor, record_id)
+                        _, paid = _ledger_totals(cursor, record_id, base)
+                        _require_unpaid(paid)
                     cursor.execute(
                         f"UPDATE {spec['table']} SET {assignments} WHERE {spec['id']} = :record_id",
                         binds,
@@ -841,6 +908,114 @@ def record(resource_name: str, record_id: int):
             if cursor.rowcount == 0:
                 raise ApiError("Record not found.", 404, "not_found")
     return jsonify({"data": {"deleted": True, "id": record_id}})
+
+
+def _lock_bill(cursor: Any, bill_id: int) -> Decimal:
+    cursor.execute("SELECT total_amount FROM Bill WHERE bill_id = :bill_id FOR UPDATE WAIT 5", {"bill_id": bill_id})
+    row = cursor.fetchone()
+    if row is None:
+        raise ApiError("Bill not found.", 404, "not_found")
+    return Decimal(str(row[0]))
+
+
+def _ledger_totals(cursor: Any, bill_id: int, base: Decimal) -> tuple[Decimal, Decimal]:
+    cursor.execute("SELECT NVL(SUM(line_total), 0) FROM Bill_Item WHERE bill_id = :bill_id", {"bill_id": bill_id})
+    items = Decimal(str(cursor.fetchone()[0]))
+    cursor.execute("SELECT NVL(SUM(amount), 0) FROM Bill_Payment WHERE bill_id = :bill_id", {"bill_id": bill_id})
+    paid = Decimal(str(cursor.fetchone()[0]))
+    return base + items, paid
+
+
+def _item_values(payload: dict[str, Any]) -> dict[str, Any]:
+    if set(payload) != {"description", "quantity", "unit_price"}:
+        raise ApiError("Supply description, quantity, and unit_price only.")
+    description = _cast_value(_field("string", required=True, nullable=False, max_length=200), payload["description"], "description")
+    quantity = _parse_integer(payload["quantity"], "quantity", minimum=1, maximum=99_999_999)
+    price = _cast_value(_field("money", required=True, nullable=False), payload["unit_price"], "unit_price")
+    return {"description": description, "quantity": quantity, "unit_price": price}
+
+
+def _require_unpaid(paid: Decimal) -> None:
+    if paid > 0:
+        raise ApiError("Charges cannot be changed after a payment is recorded.", 409, "invoice_has_payments")
+
+
+@api.get("/api/bills/<int:bill_id>/ledger")
+def bill_ledger(bill_id: int):
+    with _db().connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT total_amount, payment_status FROM Bill WHERE bill_id = :bill_id", {"bill_id": bill_id})
+            row = cursor.fetchone()
+            if row is None:
+                raise ApiError("Bill not found.", 404, "not_found")
+            total, paid = _ledger_totals(cursor, bill_id, Decimal(str(row[0])))
+            cursor.execute("SELECT item_id, description, quantity, unit_price, line_total FROM Bill_Item WHERE bill_id = :bill_id ORDER BY item_id", {"bill_id": bill_id})
+            items = _fetch_rows(cursor)
+            cursor.execute("SELECT payment_id, amount, payment_method, reference, recorded_at FROM Bill_Payment WHERE bill_id = :bill_id ORDER BY payment_id", {"bill_id": bill_id})
+            payments = _fetch_rows(cursor)
+    status = "Unpaid" if paid == 0 else "Paid" if paid == total else "Partial"
+    return jsonify({"data": {"bill_id": bill_id, "legacy_charge_total": _json_value(row[0]),
+        "legacy_status": row[1], "billed": _json_value(total), "paid": _json_value(paid),
+        "balance": _json_value(total - paid), "status": status, "items": items, "payments": payments}})
+
+
+@api.post("/api/bills/<int:bill_id>/items")
+def add_bill_item(bill_id: int):
+    values = _item_values(_request_json())
+    with _transaction(_db()) as connection:
+        with connection.cursor() as cursor:
+            base = _lock_bill(cursor, bill_id)
+            _, paid = _ledger_totals(cursor, bill_id, base)
+            _require_unpaid(paid)
+            out_id = cursor.var(int)
+            cursor.execute("INSERT INTO Bill_Item (bill_id, description, quantity, unit_price) VALUES (:bill_id, :description, :quantity, :unit_price) RETURNING item_id INTO :out_id", {**values, "bill_id": bill_id, "out_id": out_id})
+            item_id = int(_output_value(out_id.getvalue()))
+    return jsonify({"data": {"id": item_id}}), 201
+
+
+@api.route("/api/bills/<int:bill_id>/items/<int:item_id>", methods=["PUT", "DELETE"])
+def bill_item(bill_id: int, item_id: int):
+    values = _item_values(_request_json()) if request.method == "PUT" else None
+    with _transaction(_db()) as connection:
+        with connection.cursor() as cursor:
+            base = _lock_bill(cursor, bill_id)
+            _, paid = _ledger_totals(cursor, bill_id, base)
+            _require_unpaid(paid)
+            if values is None:
+                cursor.execute("DELETE FROM Bill_Item WHERE bill_id = :bill_id AND item_id = :item_id", {"bill_id": bill_id, "item_id": item_id})
+            else:
+                cursor.execute("UPDATE Bill_Item SET description = :description, quantity = :quantity, unit_price = :unit_price WHERE bill_id = :bill_id AND item_id = :item_id", {**values, "bill_id": bill_id, "item_id": item_id})
+            if cursor.rowcount == 0:
+                raise ApiError("Item not found.", 404, "not_found")
+    return jsonify({"data": {"id": item_id}})
+
+
+@api.post("/api/bills/<int:bill_id>/payments")
+def add_bill_payment(bill_id: int):
+    payload = _request_json()
+    if set(payload) - {"amount", "payment_method", "reference", "idempotency_key"} or not {"amount", "payment_method", "idempotency_key"}.issubset(payload):
+        raise ApiError("Supply amount, payment_method, idempotency_key, and optional reference.")
+    key = payload["idempotency_key"]
+    if not isinstance(key, str) or not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", key):
+        raise ApiError("idempotency_key must be a UUID.")
+    key = key.lower()
+    amount = _cast_value(_field("money", required=True, nullable=False), payload["amount"], "amount")
+    if amount <= 0:
+        raise ApiError("Payment amount must be greater than zero.")
+    method = _cast_value(_field("choice", required=True, nullable=False, choices=("Cash", "Card", "Transfer", "Other")), payload["payment_method"], "payment_method")
+    reference = payload.get("reference")
+    if reference is not None:
+        reference = _cast_value(_field("string", max_length=100), reference, "reference")
+    with _transaction(_db()) as connection:
+        with connection.cursor() as cursor:
+            base = _lock_bill(cursor, bill_id)
+            total, paid = _ledger_totals(cursor, bill_id, base)
+            if amount > total - paid:
+                raise ApiError("Payment exceeds the outstanding balance.", 409, "overpayment")
+            out_id = cursor.var(int)
+            cursor.execute("INSERT INTO Bill_Payment (bill_id, amount, payment_method, reference, idempotency_key) VALUES (:bill_id, :amount, :payment_method, :reference, :idempotency_key) RETURNING payment_id INTO :out_id", {"bill_id": bill_id, "amount": amount, "payment_method": method, "reference": reference, "idempotency_key": key, "out_id": out_id})
+            payment_id = int(_output_value(out_id.getvalue()))
+    return jsonify({"data": {"id": payment_id}}), 201
 
 
 @api.post("/api/medicines/<int:medicine_id>/stock-adjustments")
@@ -979,6 +1154,8 @@ def _cast_value(definition: dict[str, Any], raw: Any, name: str) -> Any:
         return value
     if kind == "id":
         return _parse_integer(raw, _label(name), minimum=1, maximum=9_999_999_999)
+    if kind == "duration":
+        return _parse_integer(raw, _label(name), minimum=1, maximum=1440)
     if kind == "quantity":
         return _parse_integer(raw, _label(name), minimum=0, maximum=9_999_999_999)
     if kind == "money":
@@ -1021,14 +1198,43 @@ def _validate_scheduled_appointment(values: dict[str, Any]) -> None:
         raise ApiError("A scheduled appointment must not be in the past.")
 
 
+def _check_doctor_slot(cursor: Any, values: dict[str, Any], appointment_id: int | None) -> None:
+    """Serialize API bookings by doctor, then check half-open intervals in the same transaction.
+
+    Direct SQL writers must use the same lock/check protocol. Oracle execution has
+    not been verified in this environment.
+    """
+    hour, minute = map(int, values["appointment_time"].split(":"))
+    start = hour * 60 + minute
+    duration = values["duration_minutes"]
+    if start + duration > 1440:
+        raise ApiError("Appointment must end no later than midnight on its scheduled date.")
+    cursor.execute("SELECT doctor_id FROM Doctor WHERE doctor_id = :doctor_id FOR UPDATE WAIT 5",
+                   {"doctor_id": values["doctor_id"]})
+    if cursor.fetchone() is None:
+        raise ApiError("Doctor not found.", 404, "not_found")
+    cursor.execute(
+        "SELECT COUNT(*) FROM Appointment a WHERE a.doctor_id = :doctor_id "
+        "AND a.appointment_date = :appointment_date "
+        "AND a.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation') "
+        "AND (:appointment_id IS NULL OR a.appointment_id <> :appointment_id) "
+        "AND (TO_NUMBER(SUBSTR(a.appointment_time, 1, 2))*60 + TO_NUMBER(SUBSTR(a.appointment_time, 4, 2))) < :end_minute "
+        "AND (TO_NUMBER(SUBSTR(a.appointment_time, 1, 2))*60 + TO_NUMBER(SUBSTR(a.appointment_time, 4, 2)) + a.duration_minutes) > :start_minute",
+        {"doctor_id": values["doctor_id"], "appointment_date": values["appointment_date"],
+         "appointment_id": appointment_id, "start_minute": start, "end_minute": start + duration},
+    )
+    if cursor.fetchone()[0]:
+        raise ApiError("This doctor already has an overlapping appointment.", 409, "appointment_overlap")
+
+
 def _update_appointment(appointment_id: int, values: dict[str, Any]) -> None:
     """Lock the row, validate its state transition, then update atomically."""
-    booking_fields = {"patient_id", "doctor_id", "appointment_date", "appointment_time"}
+    booking_fields = {"patient_id", "doctor_id", "appointment_date", "appointment_time", "duration_minutes"}
     terminal_statuses = {"Completed", "Cancelled", "No-show"}
     with _transaction(_db()) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT patient_id, doctor_id, appointment_date, appointment_time, status "
+                "SELECT patient_id, doctor_id, appointment_date, appointment_time, status, duration_minutes "
                 "FROM Appointment WHERE appointment_id = :appointment_id FOR UPDATE",
                 {"appointment_id": appointment_id},
             )
@@ -1036,7 +1242,7 @@ def _update_appointment(appointment_id: int, values: dict[str, Any]) -> None:
             if current is None:
                 raise ApiError("Appointment not found.", 404, "not_found")
 
-            columns = ("patient_id", "doctor_id", "appointment_date", "appointment_time", "status")
+            columns = ("patient_id", "doctor_id", "appointment_date", "appointment_time", "status", "duration_minutes")
             current_values = dict(zip(columns, current))
             changed_fields = {
                 key for key in columns
@@ -1084,6 +1290,8 @@ def _update_appointment(appointment_id: int, values: dict[str, Any]) -> None:
             if status_changed and effective_status == "No-show" and effective_day >= database_today:
                 raise ApiError("An appointment can be marked No-show only after its date has passed.", 409, "appointment_not_overdue")
 
+            if booking_changes:
+                _check_doctor_slot(cursor, {**current_values, **values}, appointment_id)
             assignments = ", ".join(f"{column} = :{column}" for column in values)
             binds = {**values, "appointment_id": appointment_id}
             cursor.execute(
