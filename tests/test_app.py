@@ -59,12 +59,28 @@ class FakeCursor:
         elif normalized.startswith("SELECT 1 AS OK FROM DUAL"):
             self.description = [("OK",)]
             self._one = (1,)
+        elif normalized.startswith("SELECT DOCTOR_ID FROM DOCTOR WHERE DOCTOR_ID"):
+            self._one = (binds["doctor_id"],)
+        elif normalized.startswith("SELECT TOTAL_AMOUNT, PAYMENT_STATUS FROM BILL WHERE BILL_ID"):
+            self._one = (self.database.bill_base, "Paid")
+        elif normalized.startswith("SELECT ITEM_ID, DESCRIPTION, QUANTITY, UNIT_PRICE, LINE_TOTAL FROM BILL_ITEM"):
+            self.description = [(name,) for name in ("ITEM_ID", "DESCRIPTION", "QUANTITY", "UNIT_PRICE", "LINE_TOTAL")]
+            self._many = list(self.database.ledger_items)
+        elif normalized.startswith("SELECT PAYMENT_ID, AMOUNT, PAYMENT_METHOD, REFERENCE, RECORDED_AT FROM BILL_PAYMENT"):
+            self.description = [(name,) for name in ("PAYMENT_ID", "AMOUNT", "PAYMENT_METHOD", "REFERENCE", "RECORDED_AT")]
+            self._many = list(self.database.ledger_payments)
+        elif normalized.startswith("SELECT TOTAL_AMOUNT FROM BILL WHERE BILL_ID"):
+            self._one = (self.database.bill_base,)
+        elif normalized.startswith("SELECT NVL(SUM(LINE_TOTAL), 0) FROM BILL_ITEM"):
+            self._one = (self.database.bill_items_total,)
+        elif normalized.startswith("SELECT NVL(SUM(AMOUNT), 0) FROM BILL_PAYMENT"):
+            self._one = (self.database.bill_paid,)
         elif normalized.startswith("SELECT TRUNC(SYSDATE) FROM DUAL"):
             self.description = [("TRUNC(SYSDATE)",)]
             self._one = (self.database.database_today,)
-        elif normalized.startswith("SELECT PATIENT_ID, DOCTOR_ID, APPOINTMENT_DATE, APPOINTMENT_TIME, STATUS FROM APPOINTMENT WHERE APPOINTMENT_ID"):
+        elif normalized.startswith("SELECT PATIENT_ID, DOCTOR_ID, APPOINTMENT_DATE, APPOINTMENT_TIME, STATUS, DURATION_MINUTES FROM APPOINTMENT WHERE APPOINTMENT_ID"):
             self.description = [(name,) for name in ("PATIENT_ID", "DOCTOR_ID", "APPOINTMENT_DATE", "APPOINTMENT_TIME", "STATUS")]
-            self._one = self.database.appointment_row
+            self._one = (*self.database.appointment_row, 30) if self.database.appointment_row and len(self.database.appointment_row) == 5 else self.database.appointment_row
         elif "ORDER BY CASE A.STATUS" in normalized and "FROM APPOINTMENT A" in normalized:
             self.description = [(name,) for name in (
                 "APPOINTMENT_ID", "PATIENT_ID", "PATIENT_NAME", "DOCTOR_ID", "DOCTOR_NAME",
@@ -77,6 +93,15 @@ class FakeCursor:
                 "PATIENT_NAME", "DOCTOR_ID", "DOCTOR_NAME", "DEPARTMENT_NAME",
             )]
             self._many = list(self.database.report_rows)
+        elif normalized.startswith("SELECT PATIENT_ID FROM PATIENT WHERE"):
+            self.description = [("PATIENT_ID",)]
+            self._one = (self.database.patient_record[0],) if self.database.patient_record else None
+        elif "FROM ADMISSION_ROOM_STAY S" in normalized:
+            is_patient = "JOIN ADMISSION A" in normalized
+            names = (["STAY_ID", "ADMISSION_ID", "ROOM_ID", "ROOM_NUMBER", "STARTED_AT", "ENDED_AT", "IS_ACTIVE", "SOURCE", "RECORDED_AT"] if is_patient else
+                     ["STAY_ID", "ROOM_ID", "ROOM_NUMBER", "STARTED_AT", "ENDED_AT", "IS_ACTIVE", "SOURCE", "RECORDED_AT"])
+            self.description = [(name,) for name in names]
+            self._many = list(self.database.stay_rows)
         elif normalized.startswith("SELECT P.PATIENT_ID AS PATIENT_ID, P.PATIENT_NAME AS PATIENT_NAME"):
             self.description = [(name,) for name in (
                 "PATIENT_ID", "PATIENT_NAME", "DATE_OF_BIRTH", "GENDER", "PHONE", "ADDRESS", "BLOOD_GROUP",
@@ -119,6 +144,8 @@ class FakeCursor:
             )
             self.description = [(column,) for column in summary_columns]
             self._one = tuple(Decimal("0") if column.endswith("_TOTAL") else 0 for column in summary_columns)
+        elif normalized.startswith("SELECT COUNT(*) FROM APPOINTMENT A WHERE A.DOCTOR_ID"):
+            self._one = (self.database.overlap_count,)
         elif normalized.startswith("SELECT COUNT(*)"):
             self.description = [("COUNT(*)",)]
             self._one = (0,)
@@ -179,6 +206,13 @@ class FakeDatabase:
         self.queue_rows = queue_rows or []
         self.report_rows = report_rows or []
         self.patient_record = patient_record
+        self.stay_rows = []
+        self.bill_base = Decimal("100.00")
+        self.bill_items_total = Decimal("0")
+        self.ledger_items = []
+        self.ledger_payments = []
+        self.bill_paid = Decimal("0")
+        self.overlap_count = 0
         self.related_records = related_records or {
             "appointments": [], "admissions": [], "prescriptions": [], "bills": [],
         }
@@ -332,6 +366,176 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("required", response.get_json()["error"]["message"].lower())
         self.assertEqual(self.database.connection_count, 0)
+
+    def test_new_admission_cannot_bypass_discharge_workflow(self):
+        payload = {"patient_id": 1, "room_id": 1, "admission_date": date.today().isoformat()}
+        for discharge in (date.today().isoformat(), (date.today() + timedelta(days=30)).isoformat()):
+            response = self.client.post("/api/admissions", json={**payload, "discharge_date": discharge})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("discharge action", response.get_json()["error"]["message"])
+        self.assertEqual(self.database.connection_count, 0)
+        response = self.client.post("/api/admissions", json=payload)
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(any(sql.startswith("INSERT INTO Admission") for sql, _ in self.database.calls))
+
+    def test_bill_and_prescription_owner_cannot_be_submitted_on_edit(self):
+        for resource, valid in (("bills", {"room_charge": "15.25"}),
+                                ("prescriptions", {"dosage": "one tablet"})):
+            for owner in (2, 9_999_999_999, 1):
+                with self.subTest(resource=resource, owner=owner):
+                    database = FakeDatabase()
+                    client = create_app(database=database, test_config={"TESTING": True}).test_client()
+                    response = client.put(f"/api/{resource}/1", json={**valid, "patient_id": owner})
+                    self.assertEqual(response.status_code, 409)
+                    self.assertEqual(response.get_json()["error"]["code"], "patient_ownership_immutable")
+                    self.assertEqual(database.calls, [])
+                    self.assertEqual(database.commits, 0)
+            database = FakeDatabase()
+            client = create_app(database=database, test_config={"TESTING": True}).test_client()
+            response = client.put(f"/api/{resource}/1", json=valid)
+            self.assertEqual(response.status_code, 200)
+            updates = [(sql, binds) for sql, binds in database.calls if sql.startswith("UPDATE")]
+            self.assertEqual(len(updates), 1)
+            self.assertNotIn("patient_id", updates[0][1])
+            self.assertEqual(database.commits, 1)
+
+    def test_discharge_rejects_invalid_and_repeated_requests(self):
+        future = (date.today() + timedelta(days=1)).isoformat()
+        response = self.client.post("/api/admissions/1/discharge", json={"discharge_date": future})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.database.calls, [])
+        database = FakeDatabase(update_rowcount=0, admission_row=(datetime(2020, 1, 2),))
+        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        response = client.post("/api/admissions/1/discharge", json={"discharge_date": date.today().isoformat()})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"]["code"], "already_discharged")
+        self.assertEqual(database.rollbacks, 1)
+        self.assertEqual(database.commits, 0)
+
+    def test_admission_trigger_failure_rolls_back_transaction(self):
+        database = FakeDatabase(execute_error=FakeOracleError("ORA-20010: bad date"))
+        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        response = client.post("/api/admissions/1/discharge", json={"discharge_date": date.today().isoformat()})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"]["code"], "invalid_discharge_date")
+        self.assertEqual(database.rollbacks, 1)
+        self.assertEqual(database.commits, 0)
+
+    def test_patient_room_history_queries_only_requested_patient(self):
+        self.database.patient_record = (31, "Test", datetime(1990, 1, 1), "O", None, None, None)
+        self.database.stay_rows = [(7, 2, 9, "R9", datetime(2026, 1, 2, 9), None, "Y", "LIVE", datetime(2026, 1, 2, 9))]
+        response = self.client.get("/api/patients/31/room-history")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["data"][0]["room_number"], "R9")
+        sql, binds = self.database.calls[-1]
+        self.assertIn("a.patient_id = :patient_id", sql)
+        self.assertEqual(binds["patient_id"], 31)
+
+    def test_transfer_history_failure_is_rolled_back(self):
+        database = FakeDatabase(execute_error=FakeOracleError("ORA-20028: history mismatch"))
+        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        response = client.put("/api/admissions/1", json={"room_id": 2})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"]["code"], "room_history_inconsistent")
+        self.assertEqual(database.commits, 0)
+        self.assertEqual(database.rollbacks, 1)
+
+    def test_booking_overlap_locks_doctor_and_rolls_back(self):
+        self.database.overlap_count = 1
+        future = (date.today() + timedelta(days=1)).isoformat()
+        response = self.client.post("/api/appointments", json={
+            "patient_id": 1, "doctor_id": 2, "appointment_date": future,
+            "appointment_time": "09:15", "duration_minutes": 30,
+        })
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"]["code"], "appointment_overlap")
+        self.assertEqual(self.database.commits, 0)
+        self.assertEqual(self.database.rollbacks, 1)
+        self.assertIn("FOR UPDATE WAIT 5", self.database.calls[0][0])
+        self.assertEqual(self.database.calls[1][1]["start_minute"], 555)
+        self.assertEqual(self.database.calls[1][1]["end_minute"], 585)
+        self.assertFalse(any(sql.startswith("INSERT") for sql, _ in self.database.calls))
+
+    def test_booking_adjacency_query_and_invalid_end(self):
+        future = (date.today() + timedelta(days=1)).isoformat()
+        payload = {"patient_id": 1, "doctor_id": 2, "appointment_date": future,
+                   "appointment_time": "09:30", "duration_minutes": 30}
+        response = self.client.post("/api/appointments", json=payload)
+        self.assertEqual(response.status_code, 201)
+        sql, binds = self.database.calls[1]
+        self.assertIn(" < :end_minute", sql)
+        self.assertIn(" > :start_minute", sql)
+        self.assertEqual((binds["start_minute"], binds["end_minute"]), (570, 600))
+        database = FakeDatabase()
+        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        response = client.post("/api/appointments", json={**payload, "appointment_time": "23:45"})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(any(sql.startswith("INSERT") for sql, _ in database.calls))
+        self.assertEqual(database.rollbacks, 1)
+
+    def test_database_overlap_error_is_safe_and_rolls_back(self):
+        database = FakeDatabase(execute_error=FakeOracleError("ORA-20030: overlap"))
+        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        response = client.post("/api/appointments", json={
+            "patient_id": 1, "doctor_id": 2,
+            "appointment_date": (date.today() + timedelta(days=1)).isoformat(),
+            "appointment_time": "10:00", "duration_minutes": 30,
+        })
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"]["code"], "appointment_overlap")
+        self.assertEqual(database.rollbacks, 1)
+        self.assertEqual(database.commits, 0)
+
+    def test_ledger_totals_do_not_infer_legacy_paid_label(self):
+        self.database.bill_items_total = Decimal("25.00")
+        self.database.bill_paid = Decimal("40.00")
+        self.database.ledger_items = [(7, "Test item", 1, Decimal("25.00"), Decimal("25.00"))]
+        self.database.ledger_payments = [(8, Decimal("40.00"), "Cash", None, datetime(2026, 1, 1, 10))]
+        response = self.client.get("/api/bills/1/ledger")
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()["data"]
+        self.assertEqual((data["billed"], data["paid"], data["balance"], data["status"]), (125, 40, 85, "Partial"))
+        self.assertEqual(data["legacy_status"], "Paid")
+        self.assertEqual(len(data["items"]), 1)
+        self.assertEqual(len(data["payments"]), 1)
+
+    def test_ledger_payment_validation_and_parent_lock(self):
+        self.database.bill_items_total = Decimal("25.00")
+        self.database.bill_paid = Decimal("50.00")
+        response = self.client.post("/api/bills/1/payments", json={"amount": "75.01", "payment_method": "Cash", "idempotency_key": "11111111-1111-4111-8111-111111111111"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"]["code"], "overpayment")
+        self.assertEqual(self.database.rollbacks, 1)
+        self.assertFalse(any(sql.startswith("INSERT") for sql, _ in self.database.calls))
+        self.database.calls.clear()
+        response = self.client.post("/api/bills/1/payments", json={"amount": "75.00", "payment_method": "Cash", "idempotency_key": "11111111-1111-4111-8111-111111111111"})
+        self.assertEqual(response.status_code, 201)
+        self.assertIn("FOR UPDATE", self.database.calls[0][0])
+        self.assertTrue(any(sql.startswith("INSERT INTO Bill_Payment") for sql, _ in self.database.calls))
+
+    def test_ledger_blocks_charge_changes_after_payment(self):
+        self.database.bill_paid = Decimal("1.00")
+        response = self.client.post("/api/bills/1/items", json={"description": "X", "quantity": 1, "unit_price": "2.00"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.database.rollbacks, 1)
+        self.assertFalse(any(sql.startswith("INSERT") for sql, _ in self.database.calls))
+        response = self.client.put("/api/bills/1", json={"room_charge": "2.00"})
+        self.assertEqual(response.status_code, 409)
+
+    def test_ledger_rejects_bad_amount_before_database(self):
+        for amount in ("-1", "0", "0.001", "NaN"):
+            response = self.client.post("/api/bills/1/payments", json={"amount": amount, "payment_method": "Cash", "idempotency_key": "11111111-1111-4111-8111-111111111111"})
+            self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.database.connection_count, 0)
+
+    def test_patient_guard_oracle_error_is_safe(self):
+        database = FakeDatabase(execute_error=FakeOracleError("ORA-20019: detail"))
+        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        response = client.put("/api/bills/1", json={"room_charge": "15.25"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"]["code"], "patient_ownership_immutable")
+        self.assertEqual(database.rollbacks, 1)
+        self.assertEqual(database.commits, 0)
 
     def test_valid_create_is_parameterized_and_committed(self):
         response = self.client.post("/api/departments", json={

@@ -1,3 +1,5 @@
+> **Current implementation note:** Room assignment history has been added to the schema and admission detail/report, with an unexecuted migration for baseline databases. Older counts and transfer limitations in this report describe the earlier nine-table snapshot; see README and `ROOM_HISTORY_DESIGN.md`. Neither live Oracle nor browser behavior has been verified in this environment. Billing remains three aggregated charges plus a status label, not a ledger.
+
 # Hospital Management System
 
 **Course:** BCSE302P — Database Systems<br>
@@ -72,7 +74,7 @@ All foreign keys use restrictive deletion behavior. The UI asks before deletion;
 
 ### 3NF rationale
 
-Each relation represents one entity or relationship record and has a generated single-column key. Descriptive attributes depend on that key, the whole key, and no other non-key attribute. Department names/locations appear only in Department; Doctor stores a department FK, not copied department details. Appointment stores patient/doctor FKs rather than copied names. Prescription stores FKs rather than patient/doctor/medicine descriptive details. Bills reference a patient and keep only bill-specific charge components. `total_amount` is a deterministic virtual calculation, not an independently maintained fact. This avoids transitive dependencies and update anomalies and meets the intended 3NF objective for the modeled scope.
+Each relation represents one entity or relationship record and has a generated single-column key. Descriptive attributes depend on that key, the whole key, and no other non-key attribute. Department names/locations appear only in Department; Doctor stores a department FK, not copied department details. Appointment stores patient/doctor FKs rather than copied names. Prescription stores FKs rather than patient/doctor/medicine descriptive details. Bills reference a patient and keep only bill-specific charge components. `total_amount` is a deterministic virtual calculation, not an independently maintained fact. These choices reduce some duplication, but do not prove the absence of update anomalies or establish 3NF for all relevant business dependencies. In particular, room status duplicates active-admission state, a transfer overwrites the earlier room, and editable historical references can reassign records. See [DATABASE_MODEL_AUDIT.md](DATABASE_MODEL_AUDIT.md) for the independent assessment and verification limits.
 
 ## 6. SQL file purposes and run order
 
@@ -85,7 +87,7 @@ Run each file from the repository root using SQL*Plus/SQLcl and a new Oracle 12c
 @sql/04_verification.sql
 ```
 
-- `01_create_schema.sql`: creates tables in parent/dependency order, constraints, indexes through unique constraints, one appointment-state trigger, and three admission triggers (room guard, room synchronization, active-delete guard). It does not drop existing objects.
+- `01_create_schema.sql`: creates tables in parent/dependency order, constraints, indexes through unique constraints, one appointment-state trigger, three admission triggers (room guard, room synchronization, active-delete guard), and two patient-ownership triggers. It does not drop existing objects; none were executed in this environment.
 - `02_sample_data.sql`: fictional, relative-date examples in all nine tables; uses `NOT EXISTS` checks, limits appointment lifecycle updates to the identity just inserted by that run, lets admission triggers synchronize room state, and commits at the end.
 - `03_useful_queries.sql`: creates two report views and includes joined histories, doctor schedules, date/status counts, current admissions/history, room occupancy, prescription and inventory reports, bill detail/status/monthly revenue, aggregate and subquery examples. UPDATE/DELETE examples are comments for deliberate manual execution; appointment/admission/prescription/bill history is not deleted by the application.
 - `04_verification.sql`: inspects columns, identity/virtual metadata, enabled constraints, foreign-key parent mappings, indexes, trigger/view status, and basic relationship counts.

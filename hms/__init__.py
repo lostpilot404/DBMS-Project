@@ -64,6 +64,8 @@ def create_app(database: Any | None = None, test_config: dict[str, Any] | None =
         oracle_code = _oracle_code(error)
         if oracle_code is not None:
             app.logger.warning("Oracle request failed (ORA-%05d)", oracle_code)
+            if oracle_code in (54, 30006):
+                return _error("resource_busy", "The scheduling resource is busy. Please retry.", 409)
             if oracle_code == 1:
                 return _error("conflict", "A record with one of these unique values already exists.", 409)
             if oracle_code in (2292,):
@@ -74,6 +76,8 @@ def create_app(database: Any | None = None, test_config: dict[str, Any] | None =
                 return _error("invalid_discharge_date", "Discharge date cannot be earlier than the admission date.", 400)
             if oracle_code == 20014:
                 return _error("active_admission", "Discharge the patient before changing or removing an active admission.", 409)
+            if oracle_code == 20019:
+                return _error("patient_ownership_immutable", "Patient ownership cannot be changed when editing this record.", 409)
             if oracle_code == 20020:
                 return _error("appointment_history", "Completed, cancelled, and no-show appointment history cannot be edited.", 409)
             if oracle_code == 20022:
@@ -86,6 +90,20 @@ def create_app(database: Any | None = None, test_config: dict[str, Any] | None =
                 return _error("appointment_not_today", "Patients can be checked in only on the appointment date.", 409)
             if oracle_code == 20026:
                 return _error("appointment_not_overdue", "An appointment can be marked No-show only after its date has passed.", 409)
+            if oracle_code == 20027:
+                return _error("admission_history", "The requested admission transition is not allowed.", 409)
+            if oracle_code == 20028:
+                return _error("room_history_inconsistent", "The room assignment history is inconsistent; no changes were saved.", 409)
+            if oracle_code == 20029:
+                return _error("invalid_admission_date", "Admission and discharge dates cannot be in the future.", 400)
+            if oracle_code == 20030:
+                return _error("appointment_overlap", "This doctor already has an overlapping appointment.", 409)
+            if oracle_code == 20031:
+                return _error("invoice_has_payments", "Invoice charges cannot be changed after payment.", 409)
+            if oracle_code == 20032:
+                return _error("payment_history", "Payment history cannot be changed or deleted.", 409)
+            if oracle_code == 20033:
+                return _error("overpayment", "Payment exceeds the outstanding balance.", 409)
             if oracle_code in (20011, 20012, 20013):
                 return _error("room_unavailable", "That room is not available for this operation.", 409)
             if oracle_code in (3113, 3114, 12170, 12514, 12541, 12545, 12547):

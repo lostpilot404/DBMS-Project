@@ -48,6 +48,7 @@ CREATE TABLE Appointment (
     doctor_id        NUMBER(10) NOT NULL,
     appointment_date DATE NOT NULL,
     appointment_time VARCHAR2(5) NOT NULL,
+    duration_minutes NUMBER(4) DEFAULT 30 NOT NULL,
     status           VARCHAR2(20) DEFAULT 'Scheduled' NOT NULL,
     -- Scheduled, checked-in, waiting, and in-consultation visits reserve a slot.
     -- Completed, cancelled, and no-show appointments remain history and release it.
@@ -68,6 +69,9 @@ CREATE TABLE Appointment (
         (status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation',
                     'Completed', 'Cancelled', 'No-show')),
     CONSTRAINT ck_appointment_day CHECK (appointment_date = TRUNC(appointment_date)),
+    CONSTRAINT ck_appt_duration CHECK (duration_minutes BETWEEN 1 AND 1440),
+    CONSTRAINT ck_appt_end_day CHECK
+        ((TO_NUMBER(SUBSTR(appointment_time, 1, 2)) * 60 + TO_NUMBER(SUBSTR(appointment_time, 4, 2)) + duration_minutes) <= 1440),
     CONSTRAINT ck_appointment_time CHECK
         (REGEXP_LIKE(appointment_time, '^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$')),
     CONSTRAINT uq_appointment_doctor_slot UNIQUE
@@ -97,7 +101,8 @@ BEGIN
                OR :NEW.patient_id <> :OLD.patient_id
                OR :NEW.doctor_id <> :OLD.doctor_id
                OR :NEW.appointment_date <> :OLD.appointment_date
-               OR :NEW.appointment_time <> :OLD.appointment_time THEN
+               OR :NEW.appointment_time <> :OLD.appointment_time
+               OR :NEW.duration_minutes <> :OLD.duration_minutes THEN
                 RAISE_APPLICATION_ERROR(-20020, 'Terminal appointment records are read-only history.');
             END IF;
         END IF;
@@ -106,7 +111,8 @@ BEGIN
            AND (:NEW.patient_id <> :OLD.patient_id
                 OR :NEW.doctor_id <> :OLD.doctor_id
                 OR :NEW.appointment_date <> :OLD.appointment_date
-                OR :NEW.appointment_time <> :OLD.appointment_time) THEN
+                OR :NEW.appointment_time <> :OLD.appointment_time
+                OR :NEW.duration_minutes <> :OLD.duration_minutes) THEN
             RAISE_APPLICATION_ERROR(-20024, 'Only a scheduled appointment can be rescheduled.');
         END IF;
 
@@ -135,6 +141,71 @@ BEGIN
         END IF;
     END IF;
 END;
+/
+
+CREATE INDEX ix_appt_doctor_day ON Appointment (doctor_id, appointment_date);
+
+-- Statement-level validation avoids querying the mutating Appointment table.
+-- All affected doctors are locked in sorted order before the overlap query.
+-- Requires READ COMMITTED and all doctor FK rows to be present. A deadlock or
+-- lock timeout aborts the statement; callers must retry the whole transaction.
+CREATE OR REPLACE TRIGGER trg_appt_overlap
+FOR INSERT OR UPDATE ON Appointment
+COMPOUND TRIGGER
+    TYPE doctor_map IS TABLE OF NUMBER INDEX BY VARCHAR2(10);
+    g_doctors doctor_map;
+
+    PROCEDURE remember_doctor(p_doctor_id NUMBER) IS
+        v_key VARCHAR2(10);
+    BEGIN
+        IF p_doctor_id IS NOT NULL THEN
+            v_key := LPAD(TO_CHAR(p_doctor_id, 'FM9999999990'), 10, '0');
+            g_doctors(v_key) := p_doctor_id;
+        END IF;
+    END;
+
+    AFTER EACH ROW IS
+    BEGIN
+        IF UPDATING THEN
+            remember_doctor(:OLD.doctor_id);
+        END IF;
+        remember_doctor(:NEW.doctor_id);
+    END AFTER EACH ROW;
+
+    AFTER STATEMENT IS
+        v_key VARCHAR2(10);
+        v_lock NUMBER;
+        v_doctor NUMBER;
+        v_count NUMBER;
+    BEGIN
+        v_key := g_doctors.FIRST;
+        WHILE v_key IS NOT NULL LOOP
+            v_doctor := g_doctors(v_key);
+            SELECT doctor_id INTO v_lock FROM Doctor
+             WHERE doctor_id = v_doctor FOR UPDATE;
+            v_key := g_doctors.NEXT(v_key);
+        END LOOP;
+        v_key := g_doctors.FIRST;
+        WHILE v_key IS NOT NULL LOOP
+            v_doctor := g_doctors(v_key);
+            SELECT COUNT(*) INTO v_count
+              FROM Appointment a JOIN Appointment b
+                ON b.doctor_id = a.doctor_id AND b.appointment_date = a.appointment_date
+               AND b.appointment_id > a.appointment_id
+             WHERE a.doctor_id = v_doctor
+               AND a.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation')
+               AND b.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation')
+               AND (TO_NUMBER(SUBSTR(a.appointment_time,1,2))*60 + TO_NUMBER(SUBSTR(a.appointment_time,4,2)))
+                   < (TO_NUMBER(SUBSTR(b.appointment_time,1,2))*60 + TO_NUMBER(SUBSTR(b.appointment_time,4,2)) + b.duration_minutes)
+               AND (TO_NUMBER(SUBSTR(a.appointment_time,1,2))*60 + TO_NUMBER(SUBSTR(a.appointment_time,4,2)) + a.duration_minutes)
+                   > (TO_NUMBER(SUBSTR(b.appointment_time,1,2))*60 + TO_NUMBER(SUBSTR(b.appointment_time,4,2)));
+            IF v_count > 0 THEN
+                RAISE_APPLICATION_ERROR(-20030, 'Doctor appointment intervals overlap.');
+            END IF;
+            v_key := g_doctors.NEXT(v_key);
+        END LOOP;
+    END AFTER STATEMENT;
+END trg_appt_overlap;
 /
 
 CREATE TABLE Room (
@@ -170,6 +241,34 @@ CREATE TABLE Admission (
     CONSTRAINT uq_admission_active_room UNIQUE (active_room_id),
     CONSTRAINT uq_admission_active_patient UNIQUE (active_patient_id)
 );
+
+-- Room assignment observations; legacy rows have unknown historical times.
+CREATE TABLE Admission_Room_Stay (
+    stay_id NUMBER(10) GENERATED ALWAYS AS IDENTITY,
+    admission_id NUMBER(10) NOT NULL,
+    room_id NUMBER(10) NOT NULL,
+    started_at TIMESTAMP,
+    ended_at TIMESTAMP,
+    is_active CHAR(1) NOT NULL,
+    source VARCHAR2(10) NOT NULL,
+    recorded_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+    active_admission_id NUMBER(10) GENERATED ALWAYS AS
+        (CASE WHEN is_active = 'Y' THEN admission_id END) VIRTUAL,
+    active_room_id NUMBER(10) GENERATED ALWAYS AS
+        (CASE WHEN is_active = 'Y' THEN room_id END) VIRTUAL,
+    CONSTRAINT pk_adm_room_stay PRIMARY KEY (stay_id),
+    CONSTRAINT fk_stay_admission FOREIGN KEY (admission_id) REFERENCES Admission (admission_id),
+    CONSTRAINT fk_stay_room FOREIGN KEY (room_id) REFERENCES Room (room_id),
+    CONSTRAINT ck_stay_active CHECK (is_active IN ('Y','N')),
+    CONSTRAINT ck_stay_source CHECK (source IN ('LIVE','LEGACY')),
+    CONSTRAINT ck_stay_dates CHECK (ended_at IS NULL OR started_at IS NULL OR ended_at >= started_at),
+    CONSTRAINT ck_stay_shape CHECK ((is_active = 'Y' AND ended_at IS NULL) OR is_active = 'N'),
+    CONSTRAINT ck_stay_live CHECK (source = 'LEGACY' OR (started_at IS NOT NULL AND (is_active = 'Y' OR ended_at IS NOT NULL))),
+    CONSTRAINT uq_stay_active_adm UNIQUE (active_admission_id),
+    CONSTRAINT uq_stay_active_room UNIQUE (active_room_id)
+);
+CREATE INDEX ix_stay_admission ON Admission_Room_Stay (admission_id);
+CREATE INDEX ix_stay_room ON Admission_Room_Stay (room_id);
 
 CREATE TABLE Medicine (
     medicine_id   NUMBER(10) GENERATED ALWAYS AS IDENTITY,
@@ -221,6 +320,129 @@ CREATE TABLE Bill (
     CONSTRAINT ck_bill_payment_status CHECK (payment_status IN ('Paid', 'Pending'))
 );
 
+-- Additional itemized charges and actual payment events. The three legacy Bill
+-- categories remain the opening charge basis; Paid/Pending is not a payment.
+CREATE TABLE Bill_Item (
+    item_id NUMBER(10) GENERATED ALWAYS AS IDENTITY,
+    bill_id NUMBER(10) NOT NULL,
+    description VARCHAR2(200) NOT NULL,
+    quantity NUMBER(8) NOT NULL,
+    unit_price NUMBER(10,2) NOT NULL,
+    line_total NUMBER(18,2) GENERATED ALWAYS AS (quantity * unit_price) VIRTUAL,
+    CONSTRAINT pk_bill_item PRIMARY KEY (item_id),
+    CONSTRAINT fk_item_bill FOREIGN KEY (bill_id) REFERENCES Bill (bill_id),
+    CONSTRAINT ck_item_quantity CHECK (quantity BETWEEN 1 AND 99999999),
+    CONSTRAINT ck_item_price CHECK (unit_price >= 0)
+);
+CREATE INDEX ix_item_bill ON Bill_Item (bill_id);
+
+CREATE TABLE Bill_Payment (
+    payment_id NUMBER(10) GENERATED ALWAYS AS IDENTITY,
+    bill_id NUMBER(10) NOT NULL,
+    amount NUMBER(11,2) NOT NULL,
+    payment_method VARCHAR2(20) NOT NULL,
+    reference VARCHAR2(100),
+    idempotency_key VARCHAR2(36) NOT NULL,
+    recorded_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT pk_bill_payment PRIMARY KEY (payment_id),
+    CONSTRAINT uq_payment_request UNIQUE (idempotency_key),
+    CONSTRAINT fk_payment_bill FOREIGN KEY (bill_id) REFERENCES Bill (bill_id),
+    CONSTRAINT ck_payment_amount CHECK (amount > 0),
+    CONSTRAINT ck_payment_method CHECK (payment_method IN ('Cash', 'Card', 'Transfer', 'Other'))
+);
+CREATE INDEX ix_payment_bill ON Bill_Payment (bill_id);
+
+-- Items are editable only before the first payment. Serialize all invoice
+-- changes on the same parent row; direct SQL follows the same protocol.
+CREATE OR REPLACE TRIGGER trg_bill_item_guard
+BEFORE INSERT OR UPDATE OR DELETE ON Bill_Item
+FOR EACH ROW
+DECLARE
+    v_bill NUMBER;
+    v_lock NUMBER;
+    v_payments NUMBER;
+BEGIN
+    IF UPDATING AND :OLD.bill_id <> :NEW.bill_id THEN
+        RAISE_APPLICATION_ERROR(-20031, 'Item ownership is immutable.');
+    END IF;
+    IF DELETING THEN v_bill := :OLD.bill_id; ELSE v_bill := :NEW.bill_id; END IF;
+    SELECT bill_id INTO v_lock FROM Bill WHERE bill_id = v_bill FOR UPDATE;
+    SELECT COUNT(*) INTO v_payments FROM Bill_Payment WHERE bill_id = v_bill;
+    IF v_payments > 0 THEN RAISE_APPLICATION_ERROR(-20031, 'Charges cannot change after payment.'); END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_bill_charge_guard
+BEFORE UPDATE OF consultation_charge, room_charge, medicine_charge ON Bill
+FOR EACH ROW
+DECLARE v_payments NUMBER;
+BEGIN
+    IF :OLD.consultation_charge <> :NEW.consultation_charge OR :OLD.room_charge <> :NEW.room_charge
+       OR :OLD.medicine_charge <> :NEW.medicine_charge THEN
+        SELECT COUNT(*) INTO v_payments FROM Bill_Payment WHERE bill_id = :OLD.bill_id;
+        IF v_payments > 0 THEN RAISE_APPLICATION_ERROR(-20031, 'Charges cannot change after payment.'); END IF;
+    END IF;
+END;
+/
+
+-- Payment rows are append-only. Check totals after the DML statement, avoiding
+-- a query of the mutating payment table. The bill row locks serialize inserts.
+CREATE OR REPLACE TRIGGER trg_bill_payment_guard
+FOR INSERT OR UPDATE OR DELETE ON Bill_Payment
+COMPOUND TRIGGER
+    TYPE bill_map IS TABLE OF NUMBER INDEX BY VARCHAR2(10);
+    g_bills bill_map;
+    BEFORE EACH ROW IS
+        v_lock NUMBER;
+        v_key VARCHAR2(10);
+    BEGIN
+        IF UPDATING OR DELETING THEN
+            RAISE_APPLICATION_ERROR(-20032, 'Payment history cannot be changed or deleted.');
+        END IF;
+        SELECT bill_id INTO v_lock FROM Bill WHERE bill_id = :NEW.bill_id FOR UPDATE;
+        v_key := LPAD(TO_CHAR(:NEW.bill_id, 'FM9999999990'), 10, '0');
+        g_bills(v_key) := :NEW.bill_id;
+    END BEFORE EACH ROW;
+    AFTER STATEMENT IS
+        v_key VARCHAR2(10);
+        v_bill NUMBER;
+        v_total NUMBER;
+        v_paid NUMBER;
+    BEGIN
+        v_key := g_bills.FIRST;
+        WHILE v_key IS NOT NULL LOOP
+            v_bill := g_bills(v_key);
+            SELECT b.total_amount + NVL((SELECT SUM(i.line_total) FROM Bill_Item i WHERE i.bill_id = b.bill_id), 0)
+              INTO v_total FROM Bill b WHERE b.bill_id = v_bill;
+            SELECT NVL(SUM(amount), 0) INTO v_paid FROM Bill_Payment WHERE bill_id = v_bill;
+            IF v_paid > v_total THEN RAISE_APPLICATION_ERROR(-20033, 'Payment exceeds outstanding balance.'); END IF;
+            v_key := g_bills.NEXT(v_key);
+        END LOOP;
+    END AFTER STATEMENT;
+END trg_bill_payment_guard;
+/
+
+-- Bill and prescription ownership is immutable after creation.
+CREATE OR REPLACE TRIGGER trg_bill_patient_guard
+BEFORE UPDATE OF patient_id ON Bill
+FOR EACH ROW
+BEGIN
+    IF :NEW.patient_id <> :OLD.patient_id THEN
+        RAISE_APPLICATION_ERROR(-20019, 'Patient ownership cannot be changed.');
+    END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_rx_patient_guard
+BEFORE UPDATE OF patient_id ON Prescription
+FOR EACH ROW
+BEGIN
+    IF :NEW.patient_id <> :OLD.patient_id THEN
+        RAISE_APPLICATION_ERROR(-20019, 'Patient ownership cannot be changed.');
+    END IF;
+END;
+/
+
 -- Admission guard: serialize room assignment with a row lock and reject unavailable rooms.
 -- Unique virtual-column constraints above are a second line of defense against races.
 CREATE OR REPLACE TRIGGER trg_admission_room_guard
@@ -229,6 +451,25 @@ FOR EACH ROW
 DECLARE
     v_room_status Room.availability_status%TYPE;
 BEGIN
+    IF TRUNC(:NEW.admission_date) > TRUNC(SYSDATE)
+       OR (:NEW.discharge_date IS NOT NULL AND TRUNC(:NEW.discharge_date) > TRUNC(SYSDATE)) THEN
+        RAISE_APPLICATION_ERROR(-20029, 'Admission and discharge dates cannot be in the future.');
+    END IF;
+    IF INSERTING AND :NEW.discharge_date IS NOT NULL THEN
+        RAISE_APPLICATION_ERROR(-20027, 'New admissions must be active.');
+    END IF;
+    IF UPDATING THEN
+        IF :NEW.patient_id <> :OLD.patient_id OR :NEW.admission_date <> :OLD.admission_date THEN
+            RAISE_APPLICATION_ERROR(-20027, 'Admission patient and date cannot be changed.');
+        END IF;
+        IF :OLD.discharge_date IS NOT NULL THEN
+            RAISE_APPLICATION_ERROR(-20027, 'A discharged admission is read-only.');
+        END IF;
+        IF :NEW.discharge_date IS NOT NULL AND :NEW.room_id <> :OLD.room_id THEN
+            RAISE_APPLICATION_ERROR(-20027, 'Transfer and discharge must be separate operations.');
+        END IF;
+    END IF;
+
     IF :NEW.discharge_date IS NOT NULL AND :NEW.discharge_date < :NEW.admission_date THEN
         RAISE_APPLICATION_ERROR(-20010, 'Discharge date cannot be earlier than admission date.');
     END IF;
@@ -298,6 +539,38 @@ BEGIN
             UPDATE Room
                SET availability_status = 'Occupied'
              WHERE room_id = :NEW.room_id;
+        END IF;
+    END IF;
+END;
+/
+
+-- Admission is the write boundary. The room history and existing occupancy
+-- triggers participate in the same Oracle statement/transaction.
+CREATE OR REPLACE TRIGGER trg_admission_stay_sync
+AFTER INSERT OR UPDATE ON Admission
+FOR EACH ROW
+DECLARE
+    v_now TIMESTAMP := SYSTIMESTAMP;
+BEGIN
+    IF INSERTING THEN
+        IF :NEW.discharge_date IS NULL THEN
+            INSERT INTO Admission_Room_Stay (admission_id, room_id, started_at, is_active, source)
+            VALUES (:NEW.admission_id, :NEW.room_id, v_now, 'Y', 'LIVE');
+        ELSE
+            -- Historical imports have no known room interval.
+            INSERT INTO Admission_Room_Stay (admission_id, room_id, is_active, source)
+            VALUES (:NEW.admission_id, :NEW.room_id, 'N', 'LEGACY');
+        END IF;
+    ELSIF :OLD.discharge_date IS NULL AND
+          (:NEW.discharge_date IS NOT NULL OR :OLD.room_id <> :NEW.room_id) THEN
+        UPDATE Admission_Room_Stay SET is_active = 'N', ended_at = v_now
+         WHERE admission_id = :OLD.admission_id AND room_id = :OLD.room_id AND is_active = 'Y';
+        IF SQL%ROWCOUNT <> 1 THEN
+            RAISE_APPLICATION_ERROR(-20028, 'Room assignment history is inconsistent.');
+        END IF;
+        IF :NEW.discharge_date IS NULL THEN
+            INSERT INTO Admission_Room_Stay (admission_id, room_id, started_at, is_active, source)
+            VALUES (:NEW.admission_id, :NEW.room_id, v_now, 'Y', 'LIVE');
         END IF;
     END IF;
 END;
