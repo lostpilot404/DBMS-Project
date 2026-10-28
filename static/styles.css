@@ -369,10 +369,16 @@ textarea.form-control { min-height: 75px; resize: vertical; }
   #modalRoot .modal-header { position: static; }
   #modalRoot .modal-header button, #modalRoot .modal-footer, #modalRoot .print-actions { display: none !important; }
   #modalRoot .modal-body { padding: 10px 0; overflow: visible; }
-  #modalRoot .patient-chart-printable .table-wrap { max-height: none; overflow: visible; border-color: #aab5bd; }
-  #modalRoot .patient-chart-printable .data-table { width: 100%; min-width: 0; table-layout: auto; }
+  #modalRoot .patient-chart-printable .table-wrap,
+  #modalRoot .bill-printable .table-wrap { max-height: none; overflow: visible; border-color: #aab5bd; }
+  #modalRoot .patient-chart-printable .data-table,
+  #modalRoot .bill-printable .data-table { width: 100%; min-width: 0; table-layout: auto; }
   #modalRoot .patient-chart-printable .data-table th,
-  #modalRoot .patient-chart-printable .data-table td { padding: 5px 6px; font-size: 9pt; }
-  #modalRoot .patient-chart-printable .data-table tr { break-inside: avoid; page-break-inside: avoid; }
-  #modalRoot .patient-chart-printable .detail-card { background: #fff; }
+  #modalRoot .patient-chart-printable .data-table td,
+  #modalRoot .bill-printable .data-table th,
+  #modalRoot .bill-printable .data-table td { padding: 5px 6px; font-size: 9pt; }
+  #modalRoot .patient-chart-printable .data-table tr,
+  #modalRoot .bill-printable .data-table tr { break-inside: avoid; page-break-inside: avoid; }
+  #modalRoot .patient-chart-printable .detail-card,
+  #modalRoot .bill-printable .detail-card { background: #fff; border-color: #aab5bd; }
 }

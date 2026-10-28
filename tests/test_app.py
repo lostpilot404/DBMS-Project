@@ -248,6 +248,14 @@ class ValidationTests(unittest.TestCase):
                 "patient_name": "Future", "date_of_birth": future, "gender": "O",
             }, partial=False)
 
+    def test_bill_date_cannot_be_in_future(self):
+        future = date.today().replace(year=date.today().year + 1).isoformat()
+        with self.assertRaises(ApiError):
+            _validate_payload(RESOURCES["bills"], {
+                "patient_id": 1, "bill_date": future, "consultation_charge": "100.00",
+                "room_charge": "0", "medicine_charge": "0", "payment_status": "Pending",
+            }, partial=False)
+
 
 class AppointmentAndExportHelperTests(unittest.TestCase):
     def test_status_vocabulary_covers_queue_and_terminal_states(self):

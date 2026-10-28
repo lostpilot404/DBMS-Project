@@ -1002,6 +1002,8 @@ def _cast_value(definition: dict[str, Any], raw: Any, name: str) -> Any:
             raise ApiError("Admission date cannot be in the future.")
         if name == "prescription_date" and value.date() > date.today():
             raise ApiError("Prescription date cannot be in the future.")
+        if name == "bill_date" and value.date() > date.today():
+            raise ApiError("Bill date cannot be in the future.")
         return value
     if kind == "time":
         if not isinstance(raw, str) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", raw.strip()):

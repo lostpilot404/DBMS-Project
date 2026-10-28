@@ -930,7 +930,14 @@ function toast(message, kind = 'success') {
 
 function resolveChoices(field, options, record) {
   let choices = field.choices ? [...(CHOICES[field.choices] || [])] : [];
-  if (field.source) choices = (options[field.source] || []).map((option) => ({ value: option.id, label: option.label }));
+  if (field.source) {
+    choices = (options[field.source] || []).map((option) => {
+      const label = (field.source === 'doctors' && option.department_name)
+        ? `${option.label} (${option.department_name})`
+        : option.label;
+      return { value: option.id, label };
+    });
+  }
   if (field.key === 'availability_status') {
     if (!record || record.availability_status !== 'Occupied') {
       choices = choices.filter((choice) => choice.value !== 'Occupied');
@@ -975,7 +982,7 @@ function renderField(field, options, record) {
       field.placeholder ? `placeholder="${escapeHtml(field.placeholder)}"` : '',
       type === 'date' && field.key === 'date_of_birth' ? `max="${todayLocal()}"` : '',
       type === 'date' && field.key === 'appointment_date' && (!record || record.status === 'Scheduled') ? `min="${todayLocal()}"` : '',
-      type === 'date' && ['admission_date', 'prescription_date'].includes(field.key) ? `max="${todayLocal()}"` : '',
+      type === 'date' && ['admission_date', 'prescription_date', 'bill_date'].includes(field.key) ? `max="${todayLocal()}"` : '',
     ].filter(Boolean).join(' ');
     control = `<input class="form-control" type="${escapeHtml(type)}" id="${id}" name="${escapeHtml(field.key)}" value="${escapeHtml(value)}" ${extras}${requiredAttr}${describedByAttr}>`;
   }
@@ -1045,8 +1052,11 @@ function openRecordDetails(view, recordId) {
   apiRequest(`/api/details/${encodeURIComponent(view)}/${encodeURIComponent(recordId)}`).then((payload) => {
     const record = payload.record || {};
     const related = payload.related || {};
-    const fields = Object.entries(record).map(([key, value]) => `
-      <div class="detail-item"><small>${escapeHtml(key.replaceAll('_', ' '))}</small><strong>${escapeHtml(formatDetailValue(key, value))}</strong></div>`).join('');
+    const fields = Object.entries(record).map(([key, value]) => {
+      const isStatus = ['status', 'availability_status', 'payment_status'].includes(key);
+      const formatted = isStatus ? statusPill(value) : escapeHtml(formatDetailValue(key, value));
+      return `<div class="detail-item"><small>${escapeHtml(key.replaceAll('_', ' '))}</small><strong>${formatted}</strong></div>`;
+    }).join('');
     const relatedColumns = {
       doctors: [{ key: 'doctor_name', label: 'Doctor' }, { key: 'specialization', label: 'Specialization' }, { key: 'department_name', label: 'Department' }],
       appointments: [{ key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'appointment_time', label: 'Time' }, { key: 'patient_name', label: 'Patient' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'status', label: 'Status', format: 'status' }],
@@ -1056,9 +1066,21 @@ function openRecordDetails(view, recordId) {
     const sections = Object.entries(related).map(([name, rows]) => `
       <section class="detail-section"><div class="detail-section-header"><h3>${escapeHtml(name[0].toUpperCase() + name.slice(1))}</h3><span class="field-hint">${rows.length} recent records</span></div>
       ${renderSimpleTable(rows, relatedColumns[name] || Object.keys(rows[0] || {}).slice(0, 5).map((key) => ({ key, label: key.replaceAll('_', ' ') })), `No related ${name} found.`)}</section>`).join('');
+    let recordTitle;
+    if (view === 'bills') {
+      recordTitle = `Bill #${String(record.bill_id || recordId).padStart(4, '0')}${record.patient_name ? ` · ${record.patient_name}` : ''}`;
+    } else if (view === 'prescriptions') {
+      recordTitle = `Prescription #${String(record.prescription_id || recordId).padStart(4, '0')}${record.patient_name ? ` · ${record.patient_name}` : ''}`;
+    } else if (view === 'admissions') {
+      recordTitle = `Admission #${String(record.admission_id || recordId).padStart(4, '0')}${record.patient_name ? ` · ${record.patient_name}` : ''}`;
+    } else if (view === 'appointments') {
+      recordTitle = `Appointment #${String(record.appointment_id || recordId).padStart(4, '0')}${record.patient_name ? ` · ${record.patient_name}` : ''}`;
+    } else {
+      recordTitle = record[config.columns[0].key] ?? `${config.singular} #${recordId}`;
+    }
     const print = view === 'bills' ? '<button class="button button-primary" type="button" data-action="print-bill">Print bill</button>' : '';
-    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide bill-printable" role="dialog" aria-modal="true" aria-labelledby="recordDetailsTitle"><header class="modal-header"><div><h2 id="recordDetailsTitle">${escapeHtml(config.singular[0].toUpperCase() + config.singular.slice(1))} details</h2><p>Record values returned by the database-backed API.</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header>
-      <div class="modal-body"><article class="detail-card"><h3>${escapeHtml(record[config.columns[0].key] ?? `Record #${recordId}`)}</h3><div class="detail-grid">${fields}</div></article>${sections}<footer class="modal-footer">${print}<button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide bill-printable" role="dialog" aria-modal="true" aria-labelledby="recordDetailsTitle"><header class="modal-header"><div><h2 id="recordDetailsTitle">${escapeHtml(config.singular[0].toUpperCase() + config.singular.slice(1))} details</h2><p>Record values returned by the database-backed API.</p></div><div class="print-actions">${view === 'bills' ? '<button class="button button-primary button-small" type="button" data-action="print-bill">Print bill</button>' : ''}<button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></div></header>
+      <div class="modal-body"><article class="detail-card"><h3>${escapeHtml(recordTitle)}</h3><div class="detail-grid">${fields}</div></article>${sections}<footer class="modal-footer">${print}<button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
     focusModal();
   }).catch((error) => {
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-label="Record details"><header class="modal-header"><h2>Record details</h2><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="error-state"><strong>Details could not be loaded</strong><p>${escapeHtml(error.message)}</p></div></section></div>`;
@@ -1383,14 +1405,30 @@ document.addEventListener('click', async (event) => {
 });
 
 document.addEventListener('input', (event) => {
+  if (event.target.closest('#recordForm, #stockForm, #dischargeForm, #moveRoomForm')) {
+    const errorEl = document.getElementById('formError');
+    if (errorEl && !errorEl.hidden) {
+      errorEl.hidden = true;
+      errorEl.textContent = '';
+    }
+  }
   if (event.target.matches('.related-search')) {
     const select = document.getElementById(event.target.dataset.relatedSearch);
     const query = event.target.value.trim().toLocaleLowerCase();
     if (select) [...select.options].forEach((option, index) => {
-      option.hidden = index > 0 && !option.textContent.toLocaleLowerCase().includes(query);
+      const hide = index > 0 && !option.textContent.toLocaleLowerCase().includes(query);
+      option.hidden = hide;
+      option.style.display = hide ? 'none' : '';
     });
   }
   if (event.target.id === 'moduleSearch') {
+    if (state.view === 'appointments' && state.appointmentView === 'queue' && state.queueData) {
+      const container = document.getElementById('moduleTable');
+      if (container) {
+        container.innerHTML = renderAppointmentQueue(state.queueData, MODULES.appointments);
+      }
+      return;
+    }
     state.page = 1;
     window.clearTimeout(state.searchTimer);
     state.searchTimer = window.setTimeout(refreshModuleRows, 250);
@@ -1438,11 +1476,19 @@ document.addEventListener('change', async (event) => {
 
 document.addEventListener('reset', (event) => {
   if (event.target.id !== 'recordForm') return;
+  const errorEl = document.getElementById('formError');
+  if (errorEl) {
+    errorEl.hidden = true;
+    errorEl.textContent = '';
+  }
   window.setTimeout(() => {
     event.target.querySelectorAll('.related-search').forEach((input) => {
       input.value = '';
       const select = document.getElementById(input.dataset.relatedSearch);
-      if (select) [...select.options].forEach((option) => { option.hidden = false; });
+      if (select) [...select.options].forEach((option) => {
+        option.hidden = false;
+        option.style.display = '';
+      });
     });
     const preview = document.getElementById('billTotalPreview');
     if (preview) {
@@ -1505,7 +1551,7 @@ document.addEventListener('keydown', (event) => {
   if (!dialog) return;
   if (event.key === 'Tab') {
     const focusable = [...dialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
-      .filter((element) => !element.hidden);
+      .filter((element) => !element.hidden && element.offsetParent !== null);
     if (!focusable.length) {
       event.preventDefault();
       return;
