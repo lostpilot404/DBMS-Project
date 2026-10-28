@@ -1,0 +1,82 @@
+erDiagram
+    DEPARTMENT {
+        NUMBER department_id PK
+        VARCHAR2 department_name UK
+        VARCHAR2 location
+    }
+    DOCTOR {
+        NUMBER doctor_id PK
+        VARCHAR2 doctor_name
+        VARCHAR2 specialization
+        VARCHAR2 phone UK
+        VARCHAR2 email UK
+        NUMBER department_id FK
+    }
+    PATIENT {
+        NUMBER patient_id PK
+        VARCHAR2 patient_name
+        DATE date_of_birth
+        CHAR gender
+        VARCHAR2 phone UK
+        VARCHAR2 address
+        VARCHAR2 blood_group
+    }
+    %% Lifecycle: Scheduled -> Checked In -> Waiting -> In Consultation -> Completed.
+    %% Cancelled and No-show are terminal states; only active visits reserve time slots.
+    APPOINTMENT {
+        NUMBER appointment_id PK
+        NUMBER patient_id FK
+        NUMBER doctor_id FK
+        DATE appointment_date
+        VARCHAR2 appointment_time
+        VARCHAR2 status
+    }
+    ROOM {
+        NUMBER room_id PK
+        VARCHAR2 room_number UK
+        VARCHAR2 room_type
+        VARCHAR2 availability_status
+    }
+    ADMISSION {
+        NUMBER admission_id PK
+        NUMBER patient_id FK
+        NUMBER room_id FK
+        DATE admission_date
+        DATE discharge_date
+    }
+    MEDICINE {
+        NUMBER medicine_id PK
+        VARCHAR2 medicine_name
+        VARCHAR2 manufacturer
+        NUMBER price
+        NUMBER stock_quantity
+    }
+    PRESCRIPTION {
+        NUMBER prescription_id PK
+        NUMBER patient_id FK
+        NUMBER doctor_id FK
+        NUMBER medicine_id FK
+        VARCHAR2 dosage
+        VARCHAR2 duration
+        DATE prescription_date
+    }
+    BILL {
+        NUMBER bill_id PK
+        NUMBER patient_id FK
+        DATE bill_date
+        NUMBER consultation_charge
+        NUMBER room_charge
+        NUMBER medicine_charge
+        NUMBER total_amount
+        VARCHAR2 payment_status
+    }
+
+    DEPARTMENT ||--o{ DOCTOR : assigns
+    PATIENT ||--o{ APPOINTMENT : books
+    DOCTOR ||--o{ APPOINTMENT : attends
+    PATIENT ||--o{ ADMISSION : has
+    ROOM ||--o{ ADMISSION : assigned_to
+    PATIENT ||--o{ PRESCRIPTION : receives
+    DOCTOR ||--o{ PRESCRIPTION : writes
+    MEDICINE ||--o{ PRESCRIPTION : names
+    PATIENT ||--o{ BILL : billed
