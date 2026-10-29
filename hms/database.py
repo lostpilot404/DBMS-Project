@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 from contextlib import contextmanager
 from typing import Any, Iterator
@@ -15,6 +16,9 @@ class OracleDatabase:
     def __init__(self, user: str | None = None, password: str | None = None,
                  dsn: str | None = None, pool_min: int = 1, pool_max: int = 4,
                  pool_increment: int = 1) -> None:
+        self.schema = os.getenv("ORACLE_SCHEMA") or None
+        if self.schema and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,29}", self.schema):
+            raise ValueError("ORACLE_SCHEMA must be a simple Oracle identifier.")
         self.user = user
         self.password = password
         self.dsn = dsn
@@ -62,6 +66,7 @@ class OracleDatabase:
                         raise DatabaseNotConfigured(
                             "The python-oracledb dependency is not installed."
                         ) from exc
+                    oracledb.defaults.fetch_decimals = True
                     self._pool = oracledb.create_pool(
                         user=self.user,
                         password=self.password,
@@ -79,6 +84,9 @@ class OracleDatabase:
         pool = self._get_pool()
         connection = pool.acquire()
         try:
+            if self.schema:
+                with connection.cursor() as cursor:
+                    cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {self.schema}")
             yield connection
         finally:
             pool.release(connection)

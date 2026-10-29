@@ -1,0 +1,15 @@
+{
+  "name": "hms-verification",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/frontend.test.cjs",
+    "test:browser": "node tests/browser_smoke.cjs",
+    "test:roles": "node scripts/role-browser.cjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@sparticuz/chromium": "153.0.0",
+    "jsdom": "26.1.0",
+    "puppeteer-core": "25.16.0"
+  }
+}

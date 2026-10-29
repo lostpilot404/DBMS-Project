@@ -7,7 +7,14 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from hms import create_app
-from hms.api import ApiError, APPOINTMENT_STATUSES, RESOURCES, _csv_value, _patient_timeline, _validate_payload
+from hms.api import (
+    APPOINTMENT_STATUSES,
+    RESOURCES,
+    ApiError,
+    _csv_value,
+    _patient_timeline,
+    _validate_payload,
+)
 from hms.database import OracleDatabase
 
 
@@ -49,6 +56,9 @@ class FakeCursor:
 
     def execute(self, sql, binds=None):
         binds = binds or {}
+        if "HMS_Write_Mutex" in sql or sql == "SET TRANSACTION READ ONLY":
+            self.database.infrastructure_calls.append((sql, binds))
+            return self
         self.database.calls.append((sql, binds))
         if self.database.execute_error:
             raise self.database.execute_error
@@ -56,6 +66,10 @@ class FakeCursor:
         if "RETURNING" in normalized and "out_id" in binds:
             binds["out_id"].setvalue(0, self.database.returning_id)
             self.rowcount = 1
+        elif normalized.startswith("SELECT HOSPITAL_TIMEZONE, SCHEMA_VERSION FROM HMS_SETTINGS"):
+            self._one = (getattr(self.database,'hospital_zone','Asia/Kolkata'), 6)
+        elif normalized.startswith("SELECT BILLED, PAID FROM V_INVOICE_BALANCES"):
+            self._one = (self.database.bill_base+self.database.bill_items_total, self.database.bill_paid)
         elif normalized.startswith("SELECT 1 AS OK FROM DUAL"):
             self.description = [("OK",)]
             self._one = (1,)
@@ -66,8 +80,8 @@ class FakeCursor:
         elif normalized.startswith("SELECT ITEM_ID, DESCRIPTION, QUANTITY, UNIT_PRICE, LINE_TOTAL FROM BILL_ITEM"):
             self.description = [(name,) for name in ("ITEM_ID", "DESCRIPTION", "QUANTITY", "UNIT_PRICE", "LINE_TOTAL")]
             self._many = list(self.database.ledger_items)
-        elif normalized.startswith("SELECT PAYMENT_ID, AMOUNT, PAYMENT_METHOD, REFERENCE, RECORDED_AT FROM BILL_PAYMENT"):
-            self.description = [(name,) for name in ("PAYMENT_ID", "AMOUNT", "PAYMENT_METHOD", "REFERENCE", "RECORDED_AT")]
+        elif normalized.startswith("SELECT PAYMENT_ID, AMOUNT, PAYMENT_METHOD, REFERENCE, RECORDED_AT, RECORDED_TIMEZONE FROM BILL_PAYMENT"):
+            self.description = [(name,) for name in ("PAYMENT_ID", "AMOUNT", "PAYMENT_METHOD", "REFERENCE", "RECORDED_AT", "RECORDED_TIMEZONE")]
             self._many = list(self.database.ledger_payments)
         elif normalized.startswith("SELECT TOTAL_AMOUNT FROM BILL WHERE BILL_ID"):
             self._one = (self.database.bill_base,)
@@ -75,7 +89,7 @@ class FakeCursor:
             self._one = (self.database.bill_items_total,)
         elif normalized.startswith("SELECT NVL(SUM(AMOUNT), 0) FROM BILL_PAYMENT"):
             self._one = (self.database.bill_paid,)
-        elif normalized.startswith("SELECT TRUNC(SYSDATE) FROM DUAL"):
+        elif normalized.startswith("SELECT HMS_TODAY() FROM DUAL"):
             self.description = [("TRUNC(SYSDATE)",)]
             self._one = (self.database.database_today,)
         elif normalized.startswith("SELECT PATIENT_ID, DOCTOR_ID, APPOINTMENT_DATE, APPOINTMENT_TIME, STATUS, DURATION_MINUTES FROM APPOINTMENT WHERE APPOINTMENT_ID"):
@@ -96,6 +110,8 @@ class FakeCursor:
         elif normalized.startswith("SELECT PATIENT_ID FROM PATIENT WHERE"):
             self.description = [("PATIENT_ID",)]
             self._one = (self.database.patient_record[0],) if self.database.patient_record else None
+        elif normalized.startswith("SELECT COUNT(*) FROM ("):
+            self._one = (0,)
         elif "FROM ADMISSION_ROOM_STAY S" in normalized:
             is_patient = "JOIN ADMISSION A" in normalized
             names = (["STAY_ID", "ADMISSION_ID", "ROOM_ID", "ROOM_NUMBER", "STARTED_AT", "ENDED_AT", "IS_ACTIVE", "SOURCE", "RECORDED_AT"] if is_patient else
@@ -125,7 +141,7 @@ class FakeCursor:
                 "MEDICINE_ID", "MEDICINE_NAME", "DOSAGE", "DURATION", "PRESCRIPTION_DATE",
             )]
             self._many = list(self.database.related_records["prescriptions"])
-        elif "FROM BILL B" in normalized and "WHERE B.PATIENT_ID = :PATIENT_ID" in normalized:
+        elif "FROM V_INVOICE_BALANCES B" in normalized and "WHERE B.PATIENT_ID = :PATIENT_ID" in normalized:
             self.description = [(name,) for name in (
                 "BILL_ID", "PATIENT_ID", "PATIENT_NAME", "BILL_DATE", "CONSULTATION_CHARGE",
                 "ROOM_CHARGE", "MEDICINE_CHARGE", "TOTAL_AMOUNT", "PAYMENT_STATUS",
@@ -144,7 +160,7 @@ class FakeCursor:
             )
             self.description = [(column,) for column in summary_columns]
             self._one = tuple(Decimal("0") if column.endswith("_TOTAL") else 0 for column in summary_columns)
-        elif normalized.startswith("SELECT COUNT(*) FROM APPOINTMENT A WHERE A.DOCTOR_ID"):
+        elif normalized.startswith("SELECT COUNT(*) FROM APPOINTMENT A WHERE (A.DOCTOR_ID"):
             self._one = (self.database.overlap_count,)
         elif normalized.startswith("SELECT COUNT(*)"):
             self.description = [("COUNT(*)",)]
@@ -217,6 +233,7 @@ class FakeDatabase:
             "appointments": [], "admissions": [], "prescriptions": [], "bills": [],
         }
         self.calls = []
+        self.infrastructure_calls = []
         self.commits = 0
         self.rollbacks = 0
         self.connection_count = 0
@@ -335,7 +352,7 @@ class AppointmentAndExportHelperTests(unittest.TestCase):
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.database = FakeDatabase()
-        self.app = create_app(database=self.database, test_config={"TESTING": True})
+        self.app = create_app(database=self.database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
         self.client = self.app.test_client()
 
     def test_static_application_is_served_with_security_headers(self):
@@ -353,10 +370,10 @@ class ApiTests(unittest.TestCase):
         response = self.client.get("/api/health")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["data"]["database"], "oracle")
-        self.assertEqual(self.database.calls[0][0], "SELECT 1 AS ok FROM dual")
+        self.assertIn("HMS_Settings", self.database.calls[0][0])
 
     def test_missing_oracle_configuration_returns_safe_503(self):
-        app = create_app(database=OracleDatabase(), test_config={"TESTING": True})
+        app = create_app(database=OracleDatabase(), test_config={"TESTING": True, "AUTH_REQUIRED": False})
         response = app.test_client().get("/api/health")
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("password", response.get_data(as_text=True).lower())
@@ -384,14 +401,14 @@ class ApiTests(unittest.TestCase):
             for owner in (2, 9_999_999_999, 1):
                 with self.subTest(resource=resource, owner=owner):
                     database = FakeDatabase()
-                    client = create_app(database=database, test_config={"TESTING": True}).test_client()
+                    client = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False}).test_client()
                     response = client.put(f"/api/{resource}/1", json={**valid, "patient_id": owner})
                     self.assertEqual(response.status_code, 409)
                     self.assertEqual(response.get_json()["error"]["code"], "patient_ownership_immutable")
                     self.assertEqual(database.calls, [])
                     self.assertEqual(database.commits, 0)
             database = FakeDatabase()
-            client = create_app(database=database, test_config={"TESTING": True}).test_client()
+            client = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False}).test_client()
             response = client.put(f"/api/{resource}/1", json=valid)
             self.assertEqual(response.status_code, 200)
             updates = [(sql, binds) for sql, binds in database.calls if sql.startswith("UPDATE")]
@@ -405,7 +422,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(self.database.calls, [])
         database = FakeDatabase(update_rowcount=0, admission_row=(datetime(2020, 1, 2),))
-        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        client = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False}).test_client()
         response = client.post("/api/admissions/1/discharge", json={"discharge_date": date.today().isoformat()})
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.get_json()["error"]["code"], "already_discharged")
@@ -414,7 +431,7 @@ class ApiTests(unittest.TestCase):
 
     def test_admission_trigger_failure_rolls_back_transaction(self):
         database = FakeDatabase(execute_error=FakeOracleError("ORA-20010: bad date"))
-        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        client = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False}).test_client()
         response = client.post("/api/admissions/1/discharge", json={"discharge_date": date.today().isoformat()})
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"]["code"], "invalid_discharge_date")
@@ -433,7 +450,7 @@ class ApiTests(unittest.TestCase):
 
     def test_transfer_history_failure_is_rolled_back(self):
         database = FakeDatabase(execute_error=FakeOracleError("ORA-20028: history mismatch"))
-        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        client = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False}).test_client()
         response = client.put("/api/admissions/1", json={"room_id": 2})
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.get_json()["error"]["code"], "room_history_inconsistent")
@@ -467,7 +484,7 @@ class ApiTests(unittest.TestCase):
         self.assertIn(" > :start_minute", sql)
         self.assertEqual((binds["start_minute"], binds["end_minute"]), (570, 600))
         database = FakeDatabase()
-        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        client = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False}).test_client()
         response = client.post("/api/appointments", json={**payload, "appointment_time": "23:45"})
         self.assertEqual(response.status_code, 400)
         self.assertFalse(any(sql.startswith("INSERT") for sql, _ in database.calls))
@@ -475,7 +492,7 @@ class ApiTests(unittest.TestCase):
 
     def test_database_overlap_error_is_safe_and_rolls_back(self):
         database = FakeDatabase(execute_error=FakeOracleError("ORA-20030: overlap"))
-        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        client = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False}).test_client()
         response = client.post("/api/appointments", json={
             "patient_id": 1, "doctor_id": 2,
             "appointment_date": (date.today() + timedelta(days=1)).isoformat(),
@@ -494,7 +511,7 @@ class ApiTests(unittest.TestCase):
         response = self.client.get("/api/bills/1/ledger")
         self.assertEqual(response.status_code, 200)
         data = response.get_json()["data"]
-        self.assertEqual((data["billed"], data["paid"], data["balance"], data["status"]), (125, 40, 85, "Partial"))
+        self.assertEqual((data["billed"], data["paid"], data["balance"], data["status"]), ("125.00", "40.00", "85.00", "Partial"))
         self.assertEqual(data["legacy_status"], "Paid")
         self.assertEqual(len(data["items"]), 1)
         self.assertEqual(len(data["payments"]), 1)
@@ -510,7 +527,7 @@ class ApiTests(unittest.TestCase):
         self.database.calls.clear()
         response = self.client.post("/api/bills/1/payments", json={"amount": "75.00", "payment_method": "Cash", "idempotency_key": "11111111-1111-4111-8111-111111111111"})
         self.assertEqual(response.status_code, 201)
-        self.assertIn("FOR UPDATE", self.database.calls[0][0])
+        self.assertTrue(any("FOR UPDATE" in sql for sql, _ in self.database.calls))
         self.assertTrue(any(sql.startswith("INSERT INTO Bill_Payment") for sql, _ in self.database.calls))
 
     def test_ledger_blocks_charge_changes_after_payment(self):
@@ -530,7 +547,7 @@ class ApiTests(unittest.TestCase):
 
     def test_patient_guard_oracle_error_is_safe(self):
         database = FakeDatabase(execute_error=FakeOracleError("ORA-20019: detail"))
-        client = create_app(database=database, test_config={"TESTING": True}).test_client()
+        client = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False}).test_client()
         response = client.put("/api/bills/1", json={"room_charge": "15.25"})
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.get_json()["error"]["code"], "patient_ownership_immutable")
@@ -552,7 +569,7 @@ class ApiTests(unittest.TestCase):
 
     def test_oracle_unique_error_rolls_back_and_maps_to_conflict(self):
         database = FakeDatabase(execute_error=FakeOracleError("ORA-00001: unique constraint"))
-        app = create_app(database=database, test_config={"TESTING": True})
+        app = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
         response = app.test_client().post("/api/departments", json={
             "department_name": "Duplicate", "location": "Block A",
         })
@@ -564,7 +581,7 @@ class ApiTests(unittest.TestCase):
 
     def test_database_unavailable_does_not_expose_driver_details(self):
         database = FakeDatabase(execute_error=FakeOracleError("ORA-12541: connect refused with secret details"))
-        app = create_app(database=database, test_config={"TESTING": True})
+        app = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
         response = app.test_client().get("/api/health")
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("secret details", response.get_data(as_text=True))
@@ -638,7 +655,7 @@ class ApiTests(unittest.TestCase):
             (1, datetime(2026, 6, 1), "09:00", "Waiting", 31, "=1+1", 7, "Dr. Rao", "Cardiology"),
             (2, datetime(2026, 6, 2), "10:00", "Completed", 31, "Asha Patient", 7, "Dr. Rao", "Cardiology"),
         ])
-        app = create_app(database=database, test_config={"TESTING": True})
+        app = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
         response = app.test_client().get("/api/reports/patient-appointments/csv", query_string={
             "patient_id": "31", "status": "Waiting", "date_from": "2026-06-01",
             "date_to": "2026-06-30", "page": "99", "page_size": "1",
@@ -663,7 +680,7 @@ class ApiTests(unittest.TestCase):
             (2, 22, "Waiting Patient", 7, "Dr. Rao", "Cardiology", today, "09:00", "Waiting"),
             (1, 21, "Scheduled Patient", 7, "Dr. Rao", "Cardiology", today, "10:00", "Scheduled"),
         ])
-        app = create_app(database=database, test_config={"TESTING": True})
+        app = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
         response = app.test_client().get("/api/appointments/queue?date=" + date.today().isoformat() + "&doctor_id=7")
         self.assertEqual(response.status_code, 200)
         data = response.get_json()["data"]
@@ -689,7 +706,7 @@ class ApiTests(unittest.TestCase):
                 "bills": [(5, 31, "Asha Patient", datetime(2026, 6, 5), Decimal("10.00"), Decimal("0"), Decimal("0"), Decimal("10.00"), "Pending")],
             },
         )
-        app = create_app(database=database, test_config={"TESTING": True})
+        app = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
         response = app.test_client().get("/api/patients/31/summary")
         self.assertEqual(response.status_code, 200)
         data = response.get_json()["data"]
@@ -698,7 +715,7 @@ class ApiTests(unittest.TestCase):
             "Bill", "Prescription", "Discharge", "Admission", "Appointment",
         ])
         self.assertIn("dispensing not recorded", data["timeline"][1]["status"])
-        self.assertEqual(len(database.calls), 5)
+        self.assertEqual(len(database.calls), 6)
 
     def test_low_stock_and_report_page_size_filters_are_validated(self):
         response = self.client.get("/api/medicines?low_stock=true")
@@ -719,7 +736,7 @@ class ApiTests(unittest.TestCase):
 
         for row, error_code in (((None,), "active_admission"), ((datetime(2024, 1, 1),), "admission_history")):
             database = FakeDatabase(admission_row=row)
-            app = create_app(database=database, test_config={"TESTING": True})
+            app = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
             response = app.test_client().delete("/api/admissions/20")
             self.assertEqual(response.status_code, 409)
             self.assertEqual(response.get_json()["error"]["code"], error_code)
@@ -759,14 +776,14 @@ class ApiTests(unittest.TestCase):
     def test_appointment_workflow_rejects_skipped_states_and_checks_in_on_the_db_date(self):
         today = datetime.combine(date.today(), time.min)
         invalid_database = FakeDatabase(appointment_row=(1, 2, today, "09:00", "Scheduled"))
-        invalid_app = create_app(database=invalid_database, test_config={"TESTING": True})
+        invalid_app = create_app(database=invalid_database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
         invalid = invalid_app.test_client().put("/api/appointments/12", json={"status": "Completed"})
         self.assertEqual(invalid.status_code, 409)
         self.assertEqual(invalid.get_json()["error"]["code"], "invalid_status_transition")
         self.assertFalse(any(sql.lstrip().upper().startswith("UPDATE APPOINTMENT") for sql, _ in invalid_database.calls))
 
         database = FakeDatabase(appointment_row=(1, 2, today, "09:00", "Scheduled"))
-        app = create_app(database=database, test_config={"TESTING": True})
+        app = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
         response = app.test_client().put("/api/appointments/12", json={"status": "Checked In"})
         self.assertEqual(response.status_code, 200)
         update_sql = next(sql for sql, _ in database.calls if sql.lstrip().upper().startswith("UPDATE APPOINTMENT"))
@@ -777,14 +794,14 @@ class ApiTests(unittest.TestCase):
         today = datetime.combine(date.today(), time.min)
         future = datetime.combine(date.today() + timedelta(days=1), time.min)
         database = FakeDatabase(appointment_row=(1, 2, future, "09:00", "Scheduled"))
-        app = create_app(database=database, test_config={"TESTING": True})
+        app = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
         check_in = app.test_client().put("/api/appointments/12", json={"status": "Checked In"})
         self.assertEqual(check_in.status_code, 409)
         self.assertEqual(check_in.get_json()["error"]["code"], "appointment_not_today")
         self.assertFalse(any(sql.lstrip().upper().startswith("UPDATE APPOINTMENT") for sql, _ in database.calls))
 
         database = FakeDatabase(appointment_row=(1, 2, today, "09:00", "Scheduled"))
-        app = create_app(database=database, test_config={"TESTING": True})
+        app = create_app(database=database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
         no_show = app.test_client().put("/api/appointments/12", json={"status": "No-show"})
         self.assertEqual(no_show.status_code, 409)
         self.assertEqual(no_show.get_json()["error"]["code"], "appointment_not_overdue")

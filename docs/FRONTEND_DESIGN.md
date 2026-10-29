@@ -1,3 +1,5 @@
+> **Historical reference, not current verification (2026-10-29):** Older “current”, table/report counts, missing-feature and no-browser statements below describe their original snapshot only. Current v6 implementation and evidence are in [REPAIR_CAMPAIGN.md](REPAIR_CAMPAIGN.md), [PROJECT_REPORT.md](PROJECT_REPORT.md) and [DEFECT_REGISTER.md](DEFECT_REGISTER.md). No live Oracle execution has been performed; real Chromium fixture automation is now available. Original audit/acceptance text is preserved below.
+
 # Frontend direction and compliance record
 
 ## Product context

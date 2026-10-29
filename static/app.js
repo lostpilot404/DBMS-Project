@@ -38,7 +38,8 @@ const CHOICES = {
   appointment_status: ['Scheduled', 'Checked In', 'Waiting', 'In Consultation', 'Completed', 'Cancelled', 'No-show'].map((value) => ({ value, label: value })),
   room_status: ['Available', 'Occupied', 'Maintenance'].map((value) => ({ value, label: value })),
   room_type: ['General', 'Semi-private', 'Private', 'ICU'].map((value) => ({ value, label: value })),
-  payment_status: ['Pending', 'Paid'].map((value) => ({ value, label: value })),
+  ledger_status: ['Unpaid', 'Partial', 'Paid', 'Voided'].map((value) => ({ value, label: value })),
+  payment_status: ['Unpaid', 'Partial', 'Paid'].map((value) => ({ value, label: value })),
   blood_group: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map((value) => ({ value, label: value })),
   low_stock: [{ value: 'true', label: 'Low stock (< 10)' }, { value: 'false', label: 'In stock (10+)' }],
 };
@@ -168,20 +169,20 @@ const MODULES = {
     noDelete: true,
   },
   bills: {
-    title: 'Billing', description: 'The register shows legacy charges and status. Open bill details for additional items and recorded payments.',
+    title: 'Billing', description: 'Invoice totals include additional items. Net collection and outstanding amounts include retained manager corrections.',
     endpoint: 'bills', addLabel: 'Create bill', singular: 'bill',
-    columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient', strong: true }, { key: 'bill_date', label: 'Bill date', format: 'date', sort: true }, { key: 'consultation_charge', label: 'Consultation', format: 'money' }, { key: 'room_charge', label: 'Room', format: 'money' }, { key: 'medicine_charge', label: 'Medicine', format: 'money' }, { key: 'total_amount', label: 'Legacy charges', format: 'money', sort: true }, { key: 'payment_status', label: 'Legacy status', format: 'status', sort: true }],
+    columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient', strong: true }, { key: 'bill_date', label: 'Bill date', format: 'date', sort: true }, { key: 'consultation_charge', label: 'Consultation', format: 'money' }, { key: 'room_charge', label: 'Room', format: 'money' }, { key: 'medicine_charge', label: 'Medicine', format: 'money' }, { key: 'total_amount', label: 'Invoice total', format: 'money', sort: true }, { key: 'payment_status', label: 'Ledger status', format: 'status', sort: true }, {key:'paid',label:'Net collected',format:'money'}, {key:'balance',label:'Outstanding',format:'money'}],
     fields: [
       { key: 'patient_id', label: 'Patient', type: 'related', source: 'patients', required: true },
       { key: 'bill_date', label: 'Bill date', type: 'date', required: true },
       { key: 'consultation_charge', label: 'Consultation charge (INR)', type: 'number', min: '0', step: '0.01', required: true, default: '0.00', hint: 'Enter the consultation/service fee.' },
       { key: 'room_charge', label: 'Room charge (INR)', type: 'number', min: '0', step: '0.01', required: true, default: '0.00', hint: 'Enter the agreed stay charge; no automatic per-night calculation is made.' },
       { key: 'medicine_charge', label: 'Medicine charge (INR)', type: 'number', min: '0', step: '0.01', required: true, default: '0.00', hint: 'Enter the billed medicine amount; prescriptions are not automatically dispensed.' },
-      { key: 'payment_status', label: 'Payment status', type: 'select', choices: 'payment_status', required: true, default: 'Pending' },
+      { key: 'notes', label: 'Administrative notes', type: 'text', maxLength: 300 },
     ],
     filters: [
       { key: 'patient_id', label: 'All patients', source: 'patients' },
-      { key: 'payment_status', label: 'All payment statuses', choices: 'payment_status' },
+      { key: 'payment_status', label: 'All payment statuses', choices: 'ledger_status' },
       { key: 'date_from', label: 'From date', type: 'date' },
       { key: 'date_to', label: 'To date', type: 'date' },
     ],
@@ -251,28 +252,28 @@ const REPORTS = {
     columns: [{ key: 'prescription_date', label: 'Date', format: 'date' }, { key: 'patient_name', label: 'Patient' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'medicine_name', label: 'Medicine' }, { key: 'dosage', label: 'Dosage' }, { key: 'duration', label: 'Duration' }],
   },
   'patient-bills': {
-    title: 'Legacy patient bill categories',
-    description: 'Original bill categories and labels only; use Invoice balances for additional items and payments.',
+    title: 'Patient invoices and ledger status',
+    description: 'Invoice totals include base categories and items; receipts minus refunds and retained charge corrections determine net status and balance.',
     filters: ['patient_id', 'payment_status', 'date_from', 'date_to'],
-    columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'bill_date', label: 'Date', format: 'date' }, { key: 'patient_name', label: 'Patient' }, { key: 'consultation_charge', label: 'Consultation', format: 'money' }, { key: 'room_charge', label: 'Room', format: 'money' }, { key: 'medicine_charge', label: 'Medicine', format: 'money' }, { key: 'total_amount', label: 'Total', format: 'money' }, { key: 'payment_status', label: 'Payment', format: 'status' }],
+    columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'bill_date', label: 'Date', format: 'date' }, { key: 'patient_name', label: 'Patient' }, { key: 'consultation_charge', label: 'Consultation', format: 'money' }, { key: 'room_charge', label: 'Room', format: 'money' }, { key: 'medicine_charge', label: 'Medicine', format: 'money' }, { key: 'total_amount', label: 'Total', format: 'money' }, { key: 'payment_status', label: 'Ledger status', format: 'status' },{key:'paid',label:'Net collected',format:'money'},{key:'balance',label:'Balance',format:'money'}],
   },
   'invoice-balances': {
     title: 'Invoice balances and payments',
     description: 'Legacy charge categories plus additional items, less recorded payments. Old Paid labels are not payments.',
     filters: ['patient_id', 'date_from', 'date_to'],
-    columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient' }, { key: 'bill_date', label: 'Date', format: 'date' }, { key: 'legacy_charges', label: 'Legacy charges', format: 'money' }, { key: 'billed', label: 'Billed', format: 'money' }, { key: 'paid', label: 'Recorded payments', format: 'money' }, { key: 'balance', label: 'Balance', format: 'money' }],
+    columns: [{ key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient' }, { key: 'bill_date', label: 'Date', format: 'date' }, { key: 'legacy_charges', label: 'Legacy charges', format: 'money' }, { key: 'billed', label: 'Billed', format: 'money' }, { key: 'paid', label: 'Net collected', format: 'money' }, { key: 'balance', label: 'Balance', format: 'money' }],
   },
   'billing-by-status': {
-    title: 'Legacy bill status (excludes ledger)',
-    description: 'Bill counts and totals grouped by payment status; payment status changes do not double-count revenue.',
+    title: 'Invoices by ledger status',
+    description: 'Invoice counts, totals, recorded payments and balances grouped by derived ledger status.',
     filters: [],
-    columns: [{ key: 'payment_status', label: 'Status', format: 'status' }, { key: 'bill_count', label: 'Bills' }, { key: 'total_amount', label: 'Total', format: 'money' }],
+    columns: [{ key: 'payment_status', label: 'Status', format: 'status' }, { key: 'bill_count', label: 'Bills' }, { key: 'total_amount', label: 'Total', format: 'money' },{key:'paid',label:'Net collected',format:'money'},{key:'balance',label:'Balance',format:'money'}],
   },
   'monthly-revenue': {
-    title: 'Legacy monthly bill status (excludes ledger)',
-    description: 'Amounts are grouped by bill date and the current Paid/Pending label. These are not payment transactions or verified receipts.',
+    title: 'Monthly receipts and outstanding invoices',
+    description: 'Net collected amounts use receipt/refund recording month; outstanding balances use invoice month. Legacy receipt timezones may be unknown; labels are never receipts.',
     filters: ['date_from', 'date_to'],
-    columns: [{ key: 'revenue_month', label: 'Month', format: 'month' }, { key: 'collected_total', label: 'Paid bills', format: 'money' }, { key: 'outstanding_total', label: 'Pending bills', format: 'money' }],
+    columns: [{ key: 'revenue_month', label: 'Month', format: 'month' }, { key: 'collected_total', label: 'Recorded receipts', format: 'money' }, { key: 'outstanding_total', label: 'Outstanding by issue month', format: 'money' }],
   },
 };
 
@@ -307,10 +308,15 @@ function escapeHtml(value) {
   })[character]);
 }
 
+let hospitalZone = 'Asia/Kolkata';
 function todayLocal() {
-  const now = new Date();
-  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 10);
+  const parts = new Intl.DateTimeFormat('en-CA', {timeZone:hospitalZone, year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date());
+  const part = (type) => parts.find(p=>p.type===type).value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+async function loadHospitalConfig() {
+  try { const config = await apiRequest('/api/config'); hospitalZone = config.timezone; refreshConnectionDate(); }
+  catch (error) { toast(`Hospital clock unavailable: ${error.message}`, 'error'); }
 }
 
 function setPageTitle(title) {
@@ -326,6 +332,7 @@ function renderNavigation() {
       <span class="nav-icon" aria-hidden="true">${renderIcon(item.icon)}</span>
       <span>${escapeHtml(item.label)}</span>
     </a>`).join('');
+  if (window.hmsUser?.role === 'manager') nav.insertAdjacentHTML('afterbegin','<button class="nav-link" data-role-refresh>← Personal workspace</button><button class="nav-link" data-role-logout>Sign out</button>');
 }
 
 function setMobileNavigation(open, { restoreFocus = true } = {}) {
@@ -338,7 +345,7 @@ function setMobileNavigation(open, { restoreFocus = true } = {}) {
   toggle.setAttribute('aria-expanded', String(open));
   toggle.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
   const icon = toggle.querySelector('[aria-hidden="true"]');
-  if (icon) icon.textContent = open ? '×' : '☰';
+  if (icon) icon.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="${open ? 'M6 6l12 12M18 6L6 18' : 'M4 6h16M4 12h16M4 18h16'}"/></svg>`;
   if (open) {
     (sidebar.querySelector('.nav-link.active') || sidebar.querySelector('.nav-link'))?.focus();
   } else if (restoreFocus && wasOpen) {
@@ -361,11 +368,12 @@ function syncNavigationBreakpoint() {
 }
 
 async function apiEnvelope(path, options = {}) {
+  const sessionMarker=window.hmsCsrf;
   let response;
   try {
     response = await fetch(path, {
       ...options,
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.hmsCsrf || '', ...(options.headers || {}) },
     });
   } catch (error) {
     throw new Error('The application server could not be reached. Check that Flask is running.');
@@ -376,7 +384,9 @@ async function apiEnvelope(path, options = {}) {
   } catch (error) {
     throw new Error('The server returned an unreadable response.');
   }
+  if (sessionMarker && sessionMarker !== window.hmsCsrf) throw new Error('Session changed; stale response ignored.');
   if (!response.ok) {
+    if (response.status === 401) window.hmsExpired?.();
     throw new Error(payload?.error?.message || `Request failed (${response.status}).`);
   }
   return payload;
@@ -396,9 +406,9 @@ function setConnectionState(connected, label) {
 async function checkConnection() {
   try {
     await apiRequest('/api/health');
-    setConnectionState(true, 'Oracle connected');
+    setConnectionState(true, 'Database connected');
   } catch (error) {
-    setConnectionState(false, 'Oracle unavailable');
+    setConnectionState(false, 'Database unavailable');
   }
 }
 
@@ -409,6 +419,7 @@ async function loadOptions(force = false) {
 }
 
 function navigate(view, updateHistory = true) {
+  if (window.HMS_ROLE_BOOT && (!window.hmsUser || !window.hmsAdminMode)) return;
   if (view !== 'dashboard' && view !== 'reports' && !MODULES[view]) return;
   const primaryNav = document.getElementById('primaryNav');
   const focusWasInNavigation = primaryNav.contains(document.activeElement);
@@ -435,7 +446,7 @@ function navigate(view, updateHistory = true) {
 async function loadDashboard() {
   if (mainContent.contains(document.activeElement)) mainContent.focus();
   const requestId = ++state.dashboardRequest;
-  mainContent.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading live Oracle summaries…</div>';
+  mainContent.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Loading database summaries…</div>';
   try {
     const data = await apiRequest('/api/dashboard');
     if (state.view !== 'dashboard' || requestId !== state.dashboardRequest) return;
@@ -463,14 +474,14 @@ function renderDashboard(data) {
     ['Occupied rooms', counts.occupied_rooms],
     ['Medicine catalogue', counts.total_medicines],
     ['Low-stock medicines', counts.low_stock_medicines],
-    ['Legacy pending bill amounts', formatMoney(data.outstanding_total)],
-    ['Bills marked Paid', formatMoney(data.collected_total)],
+    ['Outstanding invoice balance', formatMoney(data.outstanding_total)],
+    ['Net collected', formatMoney(data.collected_total)],
   ];
   const recent = data.recent_records || [];
   mainContent.innerHTML = `
     <div class="dashboard-greeting">
       <div><h2>Hospital overview</h2><p>Operational queues first; supporting register totals follow.</p></div>
-      <div class="dashboard-mark"><span>Oracle snapshot · refresh to update</span><button class="button button-secondary button-small" type="button" data-action="refresh">Refresh dashboard</button></div>
+      <div class="dashboard-mark"><span>Database snapshot · refresh to update</span><button class="button button-secondary button-small" type="button" data-action="refresh">Refresh dashboard</button></div>
     </div>
     <section class="summary-grid" aria-label="Priority queues and room capacity">
       ${cards.map(([label, value, icon, note, view, mode]) => `
@@ -489,7 +500,7 @@ function renderDashboard(data) {
         ], 'No upcoming appointments are scheduled.', 'Upcoming appointments')}</div>
       </article>
       <article class="panel">
-        <header class="panel-header"><div><h2 class="panel-title">Legacy pending bills</h2><p class="panel-subtitle">Pending · ${escapeHtml(formatMoney(data.outstanding_total))} total</p></div><button class="panel-link" type="button" data-action="navigate" data-view="bills">View billing →</button></header>
+        <header class="panel-header"><div><h2 class="panel-title">Outstanding invoices</h2><p class="panel-subtitle">Balance · ${escapeHtml(formatMoney(data.outstanding_total))} total</p></div><button class="panel-link" type="button" data-action="navigate" data-view="bills">View billing →</button></header>
         <div class="panel-body">${renderSimpleTable(data.outstanding_bills || [], [
           { key: 'bill_id', label: 'Bill', format: 'recordId' }, { key: 'patient_name', label: 'Patient', strong: true },
           { key: 'bill_date', label: 'Date', format: 'date' }, { key: 'total_amount', label: 'Amount', format: 'money' },
@@ -673,7 +684,7 @@ function renderReportFilter(key, options) {
     const label = ({ patient_id: 'All patients', doctor_id: 'All doctors', medicine_id: 'All medicines', room_id: 'All rooms' })[key];
     return `<label class="visually-hidden" for="report-${key}">${label}</label><select class="control report-filter" id="report-${key}" data-filter="${key}"><option value="">${label}</option>${choices.map((option) => `<option value="${escapeHtml(option.id)}">${escapeHtml(option.label)}</option>`).join('')}</select>`;
   }
-  const choices = key === 'status' ? CHOICES.appointment_status : CHOICES.payment_status;
+  const choices = key === 'status' ? CHOICES.appointment_status : CHOICES.ledger_status;
   const label = key === 'status' ? 'All statuses' : 'All payment statuses';
   return `<label class="visually-hidden" for="report-${key}">${label}</label><select class="control report-filter" id="report-${key}" data-filter="${key}"><option value="">${label}</option>${choices.map((choice) => `<option value="${escapeHtml(choice.value)}">${escapeHtml(choice.label)}</option>`).join('')}</select>`;
 }
@@ -695,7 +706,7 @@ async function refreshReportRows() {
   const config = REPORTS[state.reportId];
   const container = document.getElementById('reportTable');
   if (!config || !container) return;
-  container.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Querying Oracle…</div>';
+  container.innerHTML = '<div class="loading-state"><span class="spinner" aria-hidden="true"></span> Querying database…</div>';
   const params = new URLSearchParams();
   document.querySelectorAll('.report-filter').forEach((control) => {
     if (control.value) params.set(control.dataset.filter, control.value);
@@ -853,7 +864,7 @@ function renderRowActions(view, config, row) {
     actions.push(`<button class="button button-secondary button-small" type="button" data-action="move-room" data-id="${safeId}" aria-label="Move ${accessibleRecordLabel} to another room">Move room</button>`);
     actions.push(`<button class="button button-secondary button-small" type="button" data-action="discharge" data-id="${safeId}" aria-label="Discharge ${accessibleRecordLabel}">Discharge</button>`);
   }
-  if (view === 'medicines') actions.push(`<button class="button button-secondary button-small" type="button" data-action="stock" data-id="${safeId}" aria-label="Adjust stock for ${accessibleRecordLabel}">Adjust stock</button>`);
+  if (view === 'medicines' && !window.hmsUser) actions.push(`<button class="button button-secondary button-small" type="button" data-action="stock" data-id="${safeId}" aria-label="Adjust stock for ${accessibleRecordLabel}">Adjust stock</button>`);
   if (view === 'appointments') {
     const appointmentDay = String(row.appointment_date || '').slice(0, 10);
     if (row.status === 'Scheduled') {
@@ -907,10 +918,21 @@ function statusPill(value) {
   return `<span class="status-pill ${escapeHtml(className)}">${escapeHtml(value)}</span>`;
 }
 
+function moneyCents(value) {
+  const text = String(value ?? '');
+  if (!/^-?\d+(?:\.\d{1,2})?$/.test(text)) throw new Error('Invalid decimal money value');
+  const negative = text.startsWith('-');
+  const [whole, fraction = ''] = text.replace(/^-/, '').split('.');
+  const cents = BigInt(whole) * 100n + BigInt(fraction.padEnd(2,'0'));
+  return negative ? -cents : cents;
+}
+function centsText(cents) { return `${cents / 100n}.${String(cents % 100n).padStart(2,'0')}`; }
+function sumMoney(values) { return centsText(values.reduce((sum,value)=>sum+moneyCents(value || '0'),0n)); }
 function formatMoney(value) {
-  const amount = Number(value);
-  if (!Number.isFinite(amount)) return '—';
-  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(amount);
+  try {
+    let cents = moneyCents(value); const sign = cents < 0n ? '-' : ''; if(cents<0n)cents=-cents;
+    return `${sign}₹${new Intl.NumberFormat('en-IN').format(cents / 100n)}.${String(cents % 100n).padStart(2,'0')}`;
+  } catch { return '—'; }
 }
 
 function formatDate(value) {
@@ -930,7 +952,7 @@ function formatMonth(value) {
 }
 
 function renderLoadError(error, retry) {
-  mainContent.innerHTML = `<div class="error-state"><span class="empty-icon" aria-hidden="true">!</span><strong>Could not load hospital data</strong><p>${escapeHtml(error.message)}<br>Confirm the Oracle service is running and the local connection variables are set.</p><button class="button button-primary" type="button" data-action="retry">Try again</button></div>`;
+  mainContent.innerHTML = `<div class="error-state"><span class="empty-icon" aria-hidden="true">!</span><strong>Could not load hospital data</strong><p>${escapeHtml(error.message)}<br>Confirm the configured database is reachable and the local connection variables are set.</p><button class="button button-primary" type="button" data-action="retry">Try again</button></div>`;
 }
 
 function toast(message, kind = 'success') {
@@ -1008,11 +1030,11 @@ async function openForm(view, record = null) {
   const config = MODULES[view];
   try {
     const options = await loadOptions(true);
-    const visibleFields = config.fields.filter((field) => !(view === 'medicines' && record && field.key === 'stock_quantity') && !(record && ['bills', 'prescriptions'].includes(view) && field.key === 'patient_id'));
+    const visibleFields = config.fields.filter((field) => !(view === 'bills' && record && (field.key === 'bill_date' || (moneyCents(record.paid || '0') > 0n && field.key.endsWith('_charge')))) && !(view === 'medicines' && record && field.key === 'stock_quantity') && !(record && ['bills', 'prescriptions'].includes(view) && field.key === 'patient_id'));
     const ownerNotice = record && ['bills', 'prescriptions'].includes(view)
       ? `<div class="form-field full-width"><strong>Patient: ${escapeHtml(record.patient_name || `#${record.patient_id}`)}</strong><small class="field-hint">Patient ownership cannot be changed after creation.</small></div>` : '';
     const formFields = ownerNotice + visibleFields.map((field) => renderField(field, options, record)).join('');
-    const totalPreview = view === 'bills' ? `<div class="form-field full-width"><div class="total-preview"><span>Calculated bill total</span><strong id="billTotalPreview">${escapeHtml(formatMoney(Number(record?.consultation_charge || 0) + Number(record?.room_charge || 0) + Number(record?.medicine_charge || 0)))}</strong></div><small class="field-hint">The Oracle database computes total_amount from the three charge components.</small></div>` : '';
+    const totalPreview = view === 'bills' ? `<div class="form-field full-width"><div class="total-preview"><span>Calculated bill total</span><strong id="billTotalPreview">${escapeHtml(formatMoney(sumMoney([record?.consultation_charge, record?.room_charge, record?.medicine_charge])))}</strong></div><small class="field-hint">Base charges only; invoice total also includes additional items. Invoice date and legacy label cannot be edited.</small></div>` : '';
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="formTitle"><header class="modal-header"><div><h2 id="formTitle">${record ? 'Edit' : 'Add'} ${escapeHtml(config.singular)}</h2><p>${record ? 'Update the selected record.' : 'Enter the details below. Related records are selected from the database.'}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header>
       <div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="recordForm" data-module="${escapeHtml(view)}" data-id="${record ? escapeHtml(record[primaryKey(view)]) : ''}"><div class="form-grid">${formFields}${totalPreview}</div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button><button class="button button-secondary" type="reset">Reset</button><button class="button button-primary" type="submit">${record ? 'Save changes' : 'Create record'}</button></footer></form></div></section></div>`;
     document.getElementById('modalRoot').querySelector('input,select,textarea')?.focus();
@@ -1043,7 +1065,7 @@ async function openPatientHistory(patientId) {
       { key: 'status', label: 'Recorded status' },
     ];
     const timeline = data.timeline || [];
-    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide patient-chart-printable" role="dialog" aria-modal="true" aria-labelledby="patientHistoryTitle"><header class="modal-header"><div><h2 id="patientHistoryTitle">Patient record</h2><p>Administrative history assembled from the database records shown below.</p></div><div class="print-actions"><button class="button button-primary button-small" type="button" data-action="print-patient">Print patient record</button><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></div></header><div class="modal-body"><article class="detail-card"><h3>${escapeHtml(patient.patient_name)}</h3><div class="detail-grid">${fields.map(([label, value]) => `<div class="detail-item"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join('')}</div></article><p class="chart-disclaimer">This record contains appointments, admissions, prescription instructions, and bills only. Diagnosis notes, triage priority, and medication dispensing are not recorded here.</p><section class="detail-section patient-timeline"><div class="detail-section-header"><h3>Chronological record</h3><span class="field-hint">${timeline.length} events</span></div>${renderSimpleTable(timeline, timelineColumns, 'No appointment, admission, prescription, or billing history is on file.', 'Patient record timeline')}</section><footer class="modal-footer print-actions"><button class="button button-primary" type="button" data-action="print-patient">Print patient record</button><button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide patient-chart-printable" role="dialog" aria-modal="true" aria-labelledby="patientHistoryTitle"><header class="modal-header"><div><h2 id="patientHistoryTitle">Patient record</h2><p>Retained history assembled from the authorized database records shown below.</p></div><div class="print-actions"><button class="button button-primary button-small" type="button" data-action="print-patient">Print patient record</button><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></div></header><div class="modal-body"><article class="detail-card"><h3>${escapeHtml(patient.patient_name)}</h3><div class="detail-grid">${fields.map(([label, value]) => `<div class="detail-item"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join('')}</div></article><p class="chart-disclaimer">${data.consultations ? 'Includes released consultations, laboratory results, ward observations and explicit dispensing events. An instruction alone never proves dispensing. Triage priority is not inferred.' : 'Legacy administrative history only: no diagnosis, triage or dispensing is inferred.'}</p><section class="detail-section patient-timeline"><div class="detail-section-header"><h3>Chronological record</h3><span class="field-hint">${timeline.length} events</span></div>${renderSimpleTable(timeline, timelineColumns, 'No appointment, admission, prescription, or billing history is on file.', 'Patient record timeline')}</section><footer class="modal-footer print-actions"><button class="button button-primary" type="button" data-action="print-patient">Print patient record</button><button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
     focusModal();
   } catch (error) {
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-label="Patient record"><header class="modal-header"><h2>Patient record</h2><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="error-state"><strong>History could not be loaded</strong><p>${escapeHtml(error.message)}</p></div></section></div>`;
@@ -1054,7 +1076,7 @@ async function openPatientHistory(patientId) {
 function formatDetailValue(key, value) {
   if (value === null || value === undefined || value === '') return '—';
   if (key.endsWith('_date') || key === 'date_of_birth') return formatDate(value);
-  if (key.includes('charge') || key === 'total_amount' || key === 'price') return formatMoney(value);
+  if (key.includes('charge') || ['billed','paid','balance','item_total','total_amount','price','unit_price','line_total','amount'].includes(key)) return formatMoney(value);
   if (key === 'gender') return ({ M: 'Male', F: 'Female', O: 'Other' })[value] || value;
   return String(value);
 }
@@ -1073,14 +1095,17 @@ function openRecordDetails(view, recordId) {
       return `<div class="detail-item"><small>${escapeHtml(key.replaceAll('_', ' '))}</small><strong>${formatted}</strong></div>`;
     }).join('');
     const relatedColumns = {
+      items: [{key:'description',label:'Description'},{key:'quantity',label:'Quantity'},{key:'unit_price',label:'Unit price',format:'money'},{key:'line_total',label:'Total',format:'money'}],
+      corrections: [{key:'event_id',label:'Correction ID'},{key:'event_kind',label:'Kind'},{key:'amount',label:'Amount',format:'money'},{key:'payment_id',label:'Original receipt'},{key:'reason',label:'Reason'},{key:'user_id',label:'Actor'},{key:'recorded_at',label:'Recorded UTC'}],
+      payments: [{key:'payment_id',label:'Receipt ID'},{key:'recorded_at',label:'Recorded'},{key:'recorded_timezone',label:'Time basis'},{key:'payment_method',label:'Method'},{key:'reference',label:'Reference'},{key:'amount',label:'Amount',format:'money'}],
       doctors: [{ key: 'doctor_name', label: 'Doctor' }, { key: 'specialization', label: 'Specialization' }, { key: 'department_name', label: 'Department' }],
       appointments: [{ key: 'appointment_date', label: 'Date', format: 'date' }, { key: 'appointment_time', label: 'Time' }, { key: 'patient_name', label: 'Patient' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'status', label: 'Status', format: 'status' }],
       prescriptions: [{ key: 'prescription_date', label: 'Date', format: 'date' }, { key: 'patient_name', label: 'Patient' }, { key: 'doctor_name', label: 'Doctor' }, { key: 'medicine_name', label: 'Medicine' }, { key: 'dosage', label: 'Dosage' }],
       admissions: [{ key: 'patient_name', label: 'Patient' }, { key: 'room_number', label: 'Room' }, { key: 'admission_date', label: 'Admitted', format: 'date' }, { key: 'discharge_date', label: 'Discharged', format: 'date' }],
-      room_assignments: [{ key: 'room_number', label: 'Room' }, { key: 'started_at', label: 'Recorded start' }, { key: 'ended_at', label: 'Recorded end' }, { key: 'is_active', label: 'Active' }, { key: 'source', label: 'Source' }],
+      room_assignments: [{key:'admission_id',label:'Admission'},{key:'patient_name',label:'Patient'}, { key: 'room_number', label: 'Room' }, { key: 'started_at', label: 'Recorded start' }, { key: 'ended_at', label: 'Recorded end' }, { key: 'is_active', label: 'Active' }, { key: 'source', label: 'Source' }],
     };
     const sections = Object.entries(related).map(([name, rows]) => `
-      <section class="detail-section"><div class="detail-section-header"><h3>${escapeHtml(name.replaceAll('_', ' '))}</h3><span class="field-hint">${rows.length} records${name === 'room_assignments' ? ' · legacy timestamps may be unknown' : ''}</span></div>
+      <section class="detail-section" data-detail-section="${escapeHtml(name)}"><div class="detail-section-header"><h3>${escapeHtml(name.replaceAll('_', ' '))}</h3><span class="field-hint">${rows.length} records${name === 'room_assignments' ? ' · legacy timestamps may be unknown' : ''}</span></div>
       ${renderSimpleTable(rows, relatedColumns[name] || Object.keys(rows[0] || {}).slice(0, 5).map((key) => ({ key, label: key.replaceAll('_', ' ') })), `No related ${name} found.`)}</section>`).join('');
     let recordTitle;
     if (view === 'bills') {
@@ -1096,8 +1121,8 @@ function openRecordDetails(view, recordId) {
     }
     const print = view === 'bills' ? '<button class="button button-primary" type="button" data-action="print-bill">Print bill</button>' : '';
     const ledger = view === 'bills' ? `<button class="button button-secondary" type="button" data-action="open-ledger" data-id="${escapeHtml(recordId)}">Items and payments</button>` : '';
-    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide bill-printable" role="dialog" aria-modal="true" aria-labelledby="recordDetailsTitle"><header class="modal-header"><div><h2 id="recordDetailsTitle">${escapeHtml(config.singular[0].toUpperCase() + config.singular.slice(1))} details</h2><p>Record values returned by the database-backed API.</p></div><div class="print-actions">${view === 'bills' ? '<button class="button button-primary button-small" type="button" data-action="print-bill">Print bill</button>' : ''}<button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></div></header>
-      <div class="modal-body"><article class="detail-card"><h3>${escapeHtml(recordTitle)}</h3><div class="detail-grid">${fields}</div></article>${sections}<footer class="modal-footer">${ledger}${print}<button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide bill-printable" role="dialog" aria-modal="true" aria-labelledby="recordDetailsTitle"><header class="modal-header"><div><h2 id="recordDetailsTitle">${escapeHtml(config.singular[0].toUpperCase() + config.singular.slice(1))} details</h2><p>Record values returned by the database-backed API. All monetary amounts are INR.</p></div><div class="print-actions">${view === 'bills' ? '<button class="button button-primary button-small" type="button" data-action="print-bill">Print bill</button>' : ''}<button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></div></header>
+      <div class="modal-body"><article class="detail-card"><h3>${escapeHtml(recordTitle)}</h3><div class="detail-grid">${fields}</div>${view === 'bills' ? '<p>Legacy status is historical and is not a payment receipt. Only the payment history below records receipts. Reasoned manager corrections and linked refunds are separate retained events below. Net invoice totals include these corrections; original receipts remain unchanged.</p>' : ''}</article>${sections}<footer class="modal-footer">${ledger}${print}<button class="button button-secondary" type="button" data-action="close-modal">Close</button></footer></div></section></div>`;
     focusModal();
   }).catch((error) => {
     modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-label="Record details"><header class="modal-header"><h2>Record details</h2><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="error-state"><strong>Details could not be loaded</strong><p>${escapeHtml(error.message)}</p></div></section></div>`;
@@ -1105,12 +1130,32 @@ function openRecordDetails(view, recordId) {
   });
 }
 
+function pendingPaymentKey(billId) { return `hms.pending.payment.v1.${window.hmsUser?.user_id || 'legacy'}.${billId}`; }
+function readPendingPayment(billId) {
+  if (window.hmsUser && localStorage.getItem(`hms.pending.payment.v1.${billId}`)) throw new Error('An unowned pending payment from the pre-login version exists. Stop and ask a manager to reconcile the original key against the ledger; do not create a new payment or discard an uncertain request.');
+  const text = localStorage.getItem(pendingPaymentKey(billId));
+  return text ? JSON.parse(text) : null;
+}
+function restorePendingPayment(billId) {
+  const pending = readPendingPayment(billId), form = document.getElementById('billPaymentForm');
+  if (!pending || !form) return;
+  for (const [name,value] of Object.entries(pending)) {
+    const field = form.elements.namedItem(name); if (!field) continue;
+    field.value = value ?? ''; if(field.tagName === 'SELECT') field.disabled=true; else field.readOnly=true;
+  }
+  form.querySelector('button[type="submit"]').textContent='Retry original payment';
+  form.insertAdjacentHTML('afterbegin','<p role="status">Unresolved payment: retry the original request to recover its receipt. Details remain locked across close/reload; do not create another payment elsewhere.</p>');
+}
 async function openLedger(billId) {
   try {
     const data = await apiRequest(`/api/bills/${encodeURIComponent(billId)}/ledger`);
-    const items = data.items.map((item) => `<tr><td>${escapeHtml(item.description)}</td><td>${escapeHtml(item.quantity)}</td><td>${escapeHtml(formatMoney(item.unit_price))}</td><td>${escapeHtml(formatMoney(item.line_total))}</td><td>${data.paid === 0 ? `<button type="button" data-action="edit-bill-item" data-id="${escapeHtml(item.item_id)}" data-description="${escapeHtml(item.description)}" data-quantity="${escapeHtml(item.quantity)}" data-price="${escapeHtml(item.unit_price)}">Edit</button> <button type="button" data-action="delete-bill-item" data-bill="${escapeHtml(billId)}" data-id="${escapeHtml(item.item_id)}">Remove</button>` : ''}</td></tr>`).join('');
-    const payments = data.payments.map((p) => `<tr><td>${escapeHtml(p.recorded_at)}</td><td>${escapeHtml(p.payment_method)}</td><td>${escapeHtml(p.reference || '—')}</td><td>${escapeHtml(formatMoney(p.amount))}</td></tr>`).join('');
-    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="ledgerTitle"><header class="modal-header"><div><h2 id="ledgerTitle">Bill #${escapeHtml(billId)} items and payments</h2><p>Legacy charge basis ${escapeHtml(formatMoney(data.legacy_charge_total))}; old status ${escapeHtml(data.legacy_status)} is not a payment record.</p></div><button class="icon-button" type="button" data-action="close-modal" aria-label="Close">×</button></header><div class="modal-body"><p><strong>Billed ${escapeHtml(formatMoney(data.billed))} · Paid ${escapeHtml(formatMoney(data.paid))} · Outstanding ${escapeHtml(formatMoney(data.balance))} · ${escapeHtml(data.status)}</strong></p><div id="formError" class="form-error" role="alert" hidden></div><h3>Additional invoice items</h3><div class="table-scroll"><table><thead><tr><th>Description</th><th>Quantity</th><th>Unit price</th><th>Total</th><th></th></tr></thead><tbody>${items || '<tr><td colspan="5">No additional items.</td></tr>'}</tbody></table></div>${data.paid === 0 ? `<form id="billItemForm" data-id="${escapeHtml(billId)}"><div class="form-grid"><div class="form-field"><label for="itemDescription">Description</label><input class="form-control" id="itemDescription" name="description" maxlength="200" required></div><div class="form-field"><label for="itemQuantity">Quantity</label><input class="form-control" id="itemQuantity" name="quantity" type="number" min="1" max="99999999" step="1" required></div><div class="form-field"><label for="itemPrice">Unit price</label><input class="form-control" id="itemPrice" name="unit_price" type="number" min="0" step="0.01" required></div></div><button class="button button-primary" type="submit">Add item</button></form>` : '<p>Charges are locked after a payment is recorded.</p>'}<h3>Payment history</h3><div class="table-scroll"><table><thead><tr><th>Recorded</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${payments || '<tr><td colspan="4">No recorded payments.</td></tr>'}</tbody></table></div>${data.balance > 0 ? `<form id="billPaymentForm" data-id="${escapeHtml(billId)}"><input type="hidden" name="idempotency_key" value="${escapeHtml(crypto.randomUUID())}"><div class="form-grid"><div class="form-field"><label for="paymentAmount">Amount</label><input class="form-control" id="paymentAmount" name="amount" type="number" min="0.01" max="${escapeHtml(data.balance)}" step="0.01" required></div><div class="form-field"><label for="paymentMethod">Method</label><select class="form-control" id="paymentMethod" name="payment_method"><option>Cash</option><option>Card</option><option>Transfer</option><option>Other</option></select></div><div class="form-field"><label for="paymentReference">Reference (optional)</label><input class="form-control" id="paymentReference" name="reference" maxlength="100"></div></div><button class="button button-primary" type="submit">Record payment</button></form>` : ''}</div></section></div>`;
+    const pending = readPendingPayment(billId);
+    const canBill = !window.hmsUser || ['manager','cashier'].includes(window.hmsUser.role);
+    const items = data.items.map((item) => `<tr><td>${escapeHtml(item.description)}</td><td>${escapeHtml(item.quantity)}</td><td>${escapeHtml(formatMoney(item.unit_price))}</td><td>${escapeHtml(formatMoney(item.line_total))}</td><td>${canBill && !data.charges_locked && moneyCents(data.paid) === 0n ? `<button type="button" data-action="edit-bill-item" data-id="${escapeHtml(item.item_id)}" data-description="${escapeHtml(item.description)}" data-quantity="${escapeHtml(item.quantity)}" data-price="${escapeHtml(item.unit_price)}">Edit</button> <button type="button" data-action="delete-bill-item" data-bill="${escapeHtml(billId)}" data-id="${escapeHtml(item.item_id)}">Remove</button>` : ''}</td></tr>`).join('');
+    const correctionRows=(data.corrections||[]).map(e=>`<tr><td>#${escapeHtml(e.event_id)}</td><td>${escapeHtml(e.event_kind)}</td><td>${escapeHtml(formatMoney(e.amount))}</td><td>${escapeHtml(e.reason)}</td><td>${escapeHtml(e.recorded_at)} UTC</td><td>${escapeHtml(e.payment_id||'—')}</td></tr>`).join('');
+    const payments = data.payments.map((p) => `<tr><td>${escapeHtml(p.recorded_at)} (${escapeHtml(p.recorded_timezone || 'legacy basis unknown')})</td><td>${escapeHtml(p.payment_method)}</td><td>${escapeHtml(p.reference || '—')}</td><td>${escapeHtml(formatMoney(p.amount))}</td></tr>`).join('');
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="ledgerTitle"><header class="modal-header"><div><h2 id="ledgerTitle">Bill #${escapeHtml(billId)} items and payments</h2><p>Legacy charge basis ${escapeHtml(formatMoney(data.legacy_charge_total))}; old status ${escapeHtml(data.legacy_status)} is not a payment record.</p></div><button class="icon-button" type="button" data-action="close-modal" aria-label="Close">×</button></header><div class="modal-body"><p><strong>Billed ${escapeHtml(formatMoney(data.billed))} · Paid ${escapeHtml(formatMoney(data.paid))} · Outstanding ${escapeHtml(formatMoney(data.balance))} · ${escapeHtml(data.status)}</strong></p><div id="formError" class="form-error" role="alert" hidden></div><h3>Additional invoice items</h3><div class="table-scroll"><table><thead><tr><th>Description</th><th>Quantity</th><th>Unit price</th><th>Total</th><th></th></tr></thead><tbody>${items || '<tr><td colspan="5">No additional items.</td></tr>'}</tbody></table></div>${canBill && !data.charges_locked && moneyCents(data.paid) === 0n ? `<form id="billItemForm" data-id="${escapeHtml(billId)}"><div class="form-grid"><div class="form-field"><label for="itemDescription">Description</label><input class="form-control" id="itemDescription" name="description" maxlength="200" required></div><div class="form-field"><label for="itemQuantity">Quantity</label><input class="form-control" id="itemQuantity" name="quantity" type="number" min="1" max="100000" step="1" required></div><div class="form-field"><label for="itemPrice">Unit price</label><input class="form-control" id="itemPrice" name="unit_price" type="number" min="0" step="0.01" required></div></div><button class="button button-primary" type="submit">Add item</button></form>` : '<p>Charges are locked after a payment is recorded.</p>'}<p>Managers authorize credits, refunds and financial write-offs in their personal workspace. Receipts and correction history are retained. A legacy Paid label is not a receipt.</p><h3>Corrective event history</h3><div class="table-scroll"><table><thead><tr><th>Event</th><th>Kind</th><th>Amount</th><th>Reason</th><th>Recorded</th><th>Original receipt</th></tr></thead><tbody>${correctionRows || '<tr><td colspan="6">No corrective events.</td></tr>'}</tbody></table></div><h3>Original payment history (gross receipts)</h3><div class="table-scroll"><table><thead><tr><th>Recorded</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead><tbody>${payments || '<tr><td colspan="4">No recorded payments.</td></tr>'}</tbody></table></div>${canBill && (moneyCents(data.balance) > 0n || pending) ? `<form id="billPaymentForm" data-id="${escapeHtml(billId)}"><input type="hidden" name="idempotency_key" value="${escapeHtml(pending?.idempotency_key || crypto.randomUUID())}"><div class="form-grid"><div class="form-field"><label for="paymentAmount">Amount</label><input class="form-control" id="paymentAmount" name="amount" type="number" min="0.01" ${pending ? '' : `max="${escapeHtml(data.balance)}"`} step="0.01" required></div><div class="form-field"><label for="paymentMethod">Method</label><select class="form-control" id="paymentMethod" name="payment_method"><option>Cash</option><option>Card</option><option>Transfer</option><option>Other</option></select></div><div class="form-field"><label for="paymentReference">Reference (optional)</label><input class="form-control" id="paymentReference" name="reference" maxlength="100"></div></div><button class="button button-primary" type="submit">Record payment</button></form>` : ''}</div></section></div>`;
+    restorePendingPayment(billId);
     focusModal();
     return true;
   } catch (error) { toast(error.message, 'error'); return false; }
@@ -1120,12 +1165,22 @@ async function submitLedgerForm(form) {
   const button = form.querySelector('button[type="submit"]');
   button.disabled = true;
   const billId = form.dataset.id;
-  const payload = Object.fromEntries(new FormData(form).entries());
+  let payload = Object.fromEntries(new FormData(form).entries());
   try {
+    const isPayment = form.id === 'billPaymentForm';
+    if (isPayment) {
+      payload = readPendingPayment(billId) || payload;
+      localStorage.setItem(pendingPaymentKey(billId), JSON.stringify(payload));
+      restorePendingPayment(billId);
+    }
     const editing = form.id === 'billItemForm' && form.dataset.itemId;
     const path = `/api/bills/${encodeURIComponent(billId)}/${form.id === 'billItemForm' ? 'items' : 'payments'}${editing ? `/${encodeURIComponent(editing)}` : ''}`;
     await apiRequest(path, { method: editing ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+    if (isPayment) localStorage.removeItem(pendingPaymentKey(billId));
     if (await openLedger(billId)) toast('Record saved.');
+    if (window.hmsUser && window.hmsRefreshWorkspace) await window.hmsRefreshWorkspace();
+    else if (state.view === 'bills') await refreshModuleRows();
+    else if (state.view === 'dashboard') await loadDashboard();
   } catch (error) { showFormError(error.message); button.disabled = false; }
 }
 
@@ -1133,14 +1188,14 @@ function openStockAdjustment(medicineId) {
   modalReturnFocus = document.activeElement;
   const medicine = state.rows.find((item) => String(item.medicine_id) === String(medicineId));
   if (!medicine) return;
-  modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="stockTitle"><header class="modal-header"><div><h2 id="stockTitle">Adjust medicine stock</h2><p>${escapeHtml(medicine.medicine_name)} · current balance ${escapeHtml(medicine.stock_quantity)}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="stockForm" data-id="${escapeHtml(medicineId)}"><div class="form-grid"><div class="form-field"><label for="stockChange">Quantity change</label><input class="form-control" id="stockChange" name="change" type="number" step="1" min="1" required placeholder="Enter units"></div><div class="form-field"><label for="stockDirection">Action</label><select class="form-control" id="stockDirection" name="stockDirection"><option value="add">Add stock</option><option value="remove">Remove stock</option></select></div><div class="form-field full-width"><small class="field-hint">Adjustments are atomic; Oracle prevents a balance below zero. This adjustment is not a dispensing record, and prescription creation never changes stock.</small></div></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button><button class="button button-primary" type="submit">Save adjustment</button></footer></form></div></section></div>`;
+  modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="stockTitle"><header class="modal-header"><div><h2 id="stockTitle">Adjust medicine stock</h2><p>${escapeHtml(medicine.medicine_name)} · current balance ${escapeHtml(medicine.stock_quantity)}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="stockForm" data-id="${escapeHtml(medicineId)}"><div class="form-grid"><div class="form-field"><label for="stockChange">Quantity change</label><input class="form-control" id="stockChange" name="change" type="number" step="1" min="1" required placeholder="Enter units"></div><div class="form-field"><label for="stockDirection">Action</label><select class="form-control" id="stockDirection" name="stockDirection"><option value="add">Add stock</option><option value="remove">Remove stock</option></select></div><div class="form-field full-width"><small class="field-hint">Adjustments are atomic; the database guards prevent a balance below zero. This adjustment is not a dispensing record, and prescription creation never changes stock.</small></div></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button><button class="button button-primary" type="submit">Save adjustment</button></footer></form></div></section></div>`;
   document.getElementById('stockChange').focus();
 }
 
 function openDischarge(admissionId) {
   modalReturnFocus = document.activeElement;
   const row = state.rows.find((item) => String(item.admission_id) === String(admissionId));
-  modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="dischargeTitle"><header class="modal-header"><div><h2 id="dischargeTitle">Discharge patient</h2><p>${escapeHtml(row?.patient_name || 'Patient')} · room ${escapeHtml(row?.room_number || '')}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="dischargeForm" data-id="${escapeHtml(admissionId)}"><div class="form-field"><label for="dischargeDate">Discharge date <span class="required-mark" aria-hidden="true">*</span></label><input class="form-control" id="dischargeDate" name="discharge_date" type="date" min="${escapeHtml(row?.admission_date || '')}" max="${todayLocal()}" value="${todayLocal()}" required><small class="field-hint">The Oracle trigger releases this room in the same transaction.</small></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button><button class="button button-primary" type="submit">Confirm discharge</button></footer></form></div></section></div>`;
+  modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="dischargeTitle"><header class="modal-header"><div><h2 id="dischargeTitle">Discharge patient</h2><p>${escapeHtml(row?.patient_name || 'Patient')} · room ${escapeHtml(row?.room_number || '')}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="dischargeForm" data-id="${escapeHtml(admissionId)}"><div class="form-field"><label for="dischargeDate">Discharge date <span class="required-mark" aria-hidden="true">*</span></label><input class="form-control" id="dischargeDate" name="discharge_date" type="date" min="${escapeHtml(row?.admission_date || '')}" max="${todayLocal()}" value="${todayLocal()}" required><small class="field-hint">The admission workflow releases this room in the same transaction.</small></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button><button class="button button-primary" type="submit">Confirm discharge</button></footer></form></div></section></div>`;
   document.getElementById('dischargeDate').focus();
 }
 
@@ -1154,7 +1209,7 @@ async function openMoveRoom(admissionId) {
     const roomControl = availableRooms.length
       ? `<select class="form-control" id="moveRoomSelect" name="room_id" required><option value="">Select an available room…</option>${roomChoices}</select>`
       : '<div class="empty-state"><strong>No rooms available</strong><span>Discharge or free a room before moving this patient.</span></div>';
-    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="moveRoomTitle"><header class="modal-header"><div><h2 id="moveRoomTitle">Move patient to another room</h2><p>${escapeHtml(row?.patient_name || 'Patient')} · currently in ${escapeHtml(row?.room_number || 'unknown room')}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="moveRoomForm" data-id="${escapeHtml(admissionId)}"><div class="form-field">${availableRooms.length ? '<label for="moveRoomSelect">Available room <span class="required-mark" aria-hidden="true">*</span></label>' : ''}${roomControl}<small class="field-hint">The active stay remains open; Oracle moves the room occupancy in the same transaction.</small></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button>${availableRooms.length ? '<button class="button button-primary" type="submit">Move patient</button>' : ''}</footer></form></div></section></div>`;
+    modalRoot.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="moveRoomTitle"><header class="modal-header"><div><h2 id="moveRoomTitle">Move patient to another room</h2><p>${escapeHtml(row?.patient_name || 'Patient')} · currently in ${escapeHtml(row?.room_number || 'unknown room')}</p></div><button class="icon-button" type="button" aria-label="Close dialog" data-action="close-modal">×</button></header><div class="modal-body"><div id="formError" class="form-error" role="alert" hidden></div><form id="moveRoomForm" data-id="${escapeHtml(admissionId)}"><div class="form-field">${availableRooms.length ? '<label for="moveRoomSelect">Available room <span class="required-mark" aria-hidden="true">*</span></label>' : ''}${roomControl}<small class="field-hint">The active stay remains open; the admission workflow moves room occupancy in the same transaction.</small></div><footer class="modal-footer"><button class="button button-secondary" type="button" data-action="close-modal">Cancel</button>${availableRooms.length ? '<button class="button button-primary" type="submit">Move patient</button>' : ''}</footer></form></div></section></div>`;
     if (availableRooms.length) document.getElementById('moveRoomSelect').focus();
     else focusModal();
   } catch (error) {
@@ -1217,7 +1272,7 @@ async function submitRecordForm(form) {
   const payload = {};
   config.fields.forEach((field) => {
     const control = form.elements.namedItem(field.key);
-    if (control) payload[field.key] = control.value === '' ? null : control.value;
+    if (control && !control.disabled) payload[field.key] = control.value === '' ? null : control.value;
   });
   const id = form.dataset.id;
   const button = form.querySelector('button[type="submit"]');
@@ -1354,7 +1409,7 @@ async function handleMoveRoomForm(form) {
 }
 
 function refreshConnectionDate() {
-  const date = new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).format(new Date());
+  const date = new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', timeZone:hospitalZone }).format(new Date());
   document.getElementById('currentDate').textContent = date;
 }
 
@@ -1483,9 +1538,9 @@ document.addEventListener('input', (event) => {
   }
   if (event.target.closest('#recordForm') && state.view === 'bills') {
     const form = event.target.closest('#recordForm');
-    const values = ['consultation_charge', 'room_charge', 'medicine_charge'].map((key) => Number(form.elements.namedItem(key)?.value || 0));
+    const values = ['consultation_charge', 'room_charge', 'medicine_charge'].map((key) => form.elements.namedItem(key)?.value || '0');
     const preview = document.getElementById('billTotalPreview');
-    if (preview) preview.textContent = formatMoney(values.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0));
+    if (preview) preview.textContent = formatMoney(sumMoney(values));
   }
 });
 
@@ -1542,8 +1597,8 @@ document.addEventListener('reset', (event) => {
     if (preview) {
       const form = event.target;
       const total = ['consultation_charge', 'room_charge', 'medicine_charge']
-        .reduce((sum, key) => sum + Number(form.elements.namedItem(key)?.value || 0), 0);
-      preview.textContent = formatMoney(total);
+        .map((key) => form.elements.namedItem(key)?.value || '0');
+      preview.textContent = formatMoney(sumMoney(total));
     }
   }, 0);
 });
@@ -1628,9 +1683,13 @@ window.addEventListener('popstate', () => {
 });
 window.addEventListener('resize', syncNavigationBreakpoint, { passive: true });
 
+function bootAdmin() {
+  renderNavigation();syncNavigationBreakpoint();
+  const initialView=location.hash.slice(1);
+  navigate(NAV_ITEMS.some(item=>item.id===initialView)?initialView:'dashboard');
+  checkConnection();loadHospitalConfig();
+}
 refreshConnectionDate();
-renderNavigation();
-syncNavigationBreakpoint();
-const initialView = location.hash.slice(1);
-navigate(NAV_ITEMS.some((item) => item.id === initialView) ? initialView : 'dashboard');
-checkConnection();
+if (window.HMS_ROLE_BOOT) window.HMS_ROLE_BOOT({bootAdmin,clear:()=>{state.rows=[];state.options=null;state.view='workspace';state.dashboardRequest++;state.moduleRequest++;state.reportRequest++;},invoice:id=>openRecordDetails('bills',id),ledger:openLedger,history:openPatientHistory,config:loadHospitalConfig,layout:syncNavigationBreakpoint,money:formatMoney,today:todayLocal});
+else bootAdmin();
+window.setInterval(refreshConnectionDate,60000);

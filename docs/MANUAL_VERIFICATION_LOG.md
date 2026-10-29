@@ -1,3 +1,13 @@
+# Current verification update — 2026-10-29
+
+> Current master continuation: all nine role screenshots visually inspected in actual Chromium with a persisted **SQLite test-only** HTTP server, plus agent-directed hostile contact/ID/overlap/mobile/logout probes and manager dashboard inspection. Corrective OP/IP automated journeys,100-line/multiple-receipt/refund print and exact evidence are in the canonical report. This is not a human-operated/manual Oracle acceptance claim; physical printer/Oracle remain blocked.
+
+Branch `arena/92301fba-dbms-project`, HEAD `2f8b2bb1a6ea2d21a3149a1234a8b866ea3e7cb1`, repaired worktree uncommitted. **No manual live-Oracle acceptance has been performed.** Automated Python doubles, mocked DOM and real Chromium with intercepted synthetic API fixtures have separate evidence in [REPAIR_CAMPAIGN.md](REPAIR_CAMPAIGN.md). Chromium153 navigated9 modules/14 reports, exercised export/payment retry after reload and invoice print layout at desktop/390px. A real print-media bug was found by screenshot/layout inspection and fixed with a failing regression. Physical printing, assistive technology and real DB E2E remain pending. The25-case [manual Oracle matrix](MANUAL_TEST_MATRIX.md) remains blocked on Oracle.
+
+---
+
+> **Historical 2026-10-28 log follows unchanged.** Its branch, counts and no-browser statements are past evidence, not the active checkout or current results. No historical reset/fetch/branch action described below was performed by this repair campaign.
+
 # Manual verification log
 
 - **Date:** 2026-10-28 (Asia/Calcutta)

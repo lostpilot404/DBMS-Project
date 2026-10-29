@@ -80,6 +80,7 @@ erDiagram
         NUMBER medicine_charge
         NUMBER total_amount
         VARCHAR2 payment_status
+        VARCHAR2 notes
     }
 
     BILL_ITEM {
@@ -98,6 +99,7 @@ erDiagram
         VARCHAR2 reference
         VARCHAR2 idempotency_key UK
         TIMESTAMP recorded_at
+        VARCHAR2 recorded_timezone
     }
     BILL ||--o{ BILL_ITEM : contains
     BILL ||--o{ BILL_PAYMENT : receives
@@ -113,3 +115,15 @@ erDiagram
     DOCTOR ||--o{ PRESCRIPTION : writes
     MEDICINE ||--o{ PRESCRIPTION : names
     PATIENT ||--o{ BILL : billed
+
+    %% Infrastructure, not clinical entities. Mutex intentionally serializes writes.
+    HMS_SETTINGS {
+        NUMBER singleton PK
+        NUMBER schema_version
+        VARCHAR2 hospital_timezone
+    }
+    HMS_WRITE_MUTEX {
+        NUMBER mutex_id PK
+    }
+    %% V_INVOICE_BALANCES derives base + items, actual payments, balance and status.
+    %% BILL.payment_status is legacy, not the derived ledger status or a receipt.

@@ -18,15 +18,9 @@ SELECT a.appointment_id,
   JOIN Department dep ON dep.department_id = d.department_id;
 
 CREATE OR REPLACE VIEW V_OUTSTANDING_BILLS AS
-SELECT b.bill_id,
-       b.patient_id,
-       p.patient_name,
-       b.bill_date,
-       b.total_amount,
-       b.payment_status
-  FROM Bill b
-  JOIN Patient p ON p.patient_id = b.patient_id
- WHERE b.payment_status = 'Pending';
+SELECT b.bill_id,b.patient_id,p.patient_name,b.bill_date,b.balance AS total_amount,
+ b.ledger_status AS payment_status,b.billed,b.paid,b.balance
+FROM V_Invoice_Balances b JOIN Patient p ON p.patient_id=b.patient_id WHERE b.balance>0;
 
 PROMPT --- All departments ---
 SELECT department_id, department_name, location
@@ -49,7 +43,7 @@ SELECT patient_name, doctor_name, department_name,
 PROMPT --- Doctor schedule (active visits from today onwards) ---
 SELECT doctor_name, patient_name, appointment_date, appointment_time, status
   FROM V_PATIENT_APPOINTMENTS
- WHERE appointment_date >= TRUNC(SYSDATE)
+ WHERE appointment_date >= HMS_Today()
    AND status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation')
  ORDER BY doctor_name, appointment_date, appointment_time;
 
@@ -58,7 +52,7 @@ PROMPT --- Today's appointment queue (waiting, checked-in, then scheduled) ---
 SELECT appointment_id, patient_name, doctor_name, department_name,
        appointment_date, appointment_time, status
   FROM V_PATIENT_APPOINTMENTS
- WHERE appointment_date = TRUNC(SYSDATE)
+ WHERE appointment_date = HMS_Today()
  ORDER BY CASE status
               WHEN 'Waiting' THEN 1 WHEN 'Checked In' THEN 2 WHEN 'Scheduled' THEN 3
               WHEN 'In Consultation' THEN 4 WHEN 'Completed' THEN 5
@@ -139,8 +133,8 @@ SELECT medicine_name, manufacturer, price, stock_quantity
 PROMPT --- Individual patient bills (change the patient ID as needed) ---
 SELECT b.bill_id, p.patient_id, p.patient_name, b.bill_date,
        b.consultation_charge, b.room_charge, b.medicine_charge,
-       b.total_amount, b.payment_status
-  FROM Bill b JOIN Patient p ON p.patient_id = b.patient_id
+       b.billed AS total_amount, b.ledger_status AS payment_status, b.paid, b.balance
+  FROM V_Invoice_Balances b JOIN Patient p ON p.patient_id = b.patient_id
  ORDER BY p.patient_name, b.bill_date DESC, b.bill_id DESC;
 
 PROMPT --- Outstanding bill detail and balance ---
@@ -149,9 +143,9 @@ SELECT bill_id, patient_id, patient_name, bill_date, total_amount
  ORDER BY bill_date, bill_id;
 
 PROMPT --- Paid bills and collected amount ---
-SELECT b.bill_id, p.patient_id, p.patient_name, b.bill_date, b.total_amount
-  FROM Bill b JOIN Patient p ON p.patient_id = b.patient_id
- WHERE b.payment_status = 'Paid'
+SELECT b.bill_id, p.patient_id, p.patient_name, b.bill_date, b.paid AS recorded_payments
+  FROM V_Invoice_Balances b JOIN Patient p ON p.patient_id = b.patient_id
+ WHERE b.paid>0
  ORDER BY b.bill_date DESC, b.bill_id DESC;
 
 
@@ -159,19 +153,23 @@ PROMPT --- Total outstanding balance ---
 SELECT NVL(SUM(total_amount), 0) AS outstanding_balance
   FROM V_OUTSTANDING_BILLS;
 
-PROMPT --- Revenue by payment status ---
-SELECT payment_status, COUNT(*) AS bill_count, SUM(total_amount) AS amount
-  FROM Bill
- GROUP BY payment_status
- ORDER BY payment_status;
+PROMPT --- Ledger by status (labels never imply receipts) ---
+SELECT ledger_status, COUNT(*) bill_count, SUM(billed) billed, SUM(paid) paid, SUM(balance) balance
+FROM V_Invoice_Balances GROUP BY ledger_status ORDER BY ledger_status;
 
-PROMPT --- Revenue grouped by month ---
-SELECT TRUNC(bill_date, 'MM') AS revenue_month,
-       SUM(CASE WHEN payment_status = 'Paid' THEN total_amount ELSE 0 END) AS paid_revenue,
-       SUM(CASE WHEN payment_status = 'Pending' THEN total_amount ELSE 0 END) AS pending_amount
-  FROM Bill
- GROUP BY TRUNC(bill_date, 'MM')
- ORDER BY revenue_month;
+PROMPT --- Recorded receipts by month (legacy timestamp timezone unknown) ---
+SELECT TRUNC(CASE WHEN pay.recorded_timezone='UTC' THEN
+ CAST(FROM_TZ(pay.recorded_at,'UTC') AT TIME ZONE cfg.hospital_timezone AS DATE)
+ ELSE CAST(pay.recorded_at AS DATE) END,'MM') AS receipt_month, SUM(pay.amount) AS collected_total
+FROM Bill_Payment pay CROSS JOIN HMS_Settings cfg
+GROUP BY TRUNC(CASE WHEN pay.recorded_timezone='UTC' THEN
+ CAST(FROM_TZ(pay.recorded_at,'UTC') AT TIME ZONE cfg.hospital_timezone AS DATE)
+ ELSE CAST(pay.recorded_at AS DATE) END,'MM') ORDER BY receipt_month;
+
+
+PROMPT --- Outstanding balance by invoice month (not receipt month) ---
+SELECT TRUNC(bill_date,'MM') invoice_month,SUM(balance) outstanding_total
+FROM V_Invoice_Balances GROUP BY TRUNC(bill_date,'MM') ORDER BY invoice_month;
 
 PROMPT --- Patients with at least one appointment (subquery) ---
 SELECT patient_id, patient_name, phone
@@ -182,9 +180,13 @@ SELECT patient_id, patient_name, phone
 PROMPT --- UPDATE examples (review keys and values before deliberately running) ---
 -- UPDATE Doctor SET phone = '+91-90000-19999' WHERE doctor_id = :doctor_id;
 -- UPDATE Appointment SET status = 'Cancelled' WHERE appointment_id = :appointment_id;
--- UPDATE Bill SET payment_status = 'Paid' WHERE bill_id = :bill_id AND payment_status = 'Pending';
+-- Record a Bill_Payment with a unique request key instead; never edit legacy status.
 
 PROMPT --- DELETE example (review key before deliberately running) ---
 -- DELETE FROM Department WHERE department_id = :department_id;
 -- The application retains appointment, admission, prescription, and billing history.
 -- Do not delete a patient, doctor, medicine, room or department with dependent records.
+
+-- AFTER008 only: net receipt/refund month reporting is exposed by V_HMS_Cash_Events.
+-- The v6 receipt query above intentionally remains gross for pre-extension compatibility.
+-- Use the application monthly-revenue report (net) and corrective postflight12 after008.

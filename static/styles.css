@@ -177,7 +177,7 @@ a { color: inherit; }
 .status-pill::before { width: 5px; height: 5px; border-radius: 50%; background: currentColor; content: ''; }
 .status-scheduled, .status-available, .status-paid, .status-completed { color: #13775e; background: #e7f6ef; }
 .status-pending, .status-occupied { color: var(--warning-ink); background: #fff5dc; }
-.status-cancelled, .status-maintenance, .status-no-show { color: #a54e4e; background: #fff0ef; }
+.status-voided, .status-cancelled, .status-maintenance, .status-no-show { color: #a54e4e; background: #fff0ef; }
 .status-checked-in, .status-waiting { color: #146e66; background: #e8f7f3; }
 .status-in-consultation { color: #315e86; background: #edf4fb; }
 .empty-state, .error-state, .loading-state { display: grid; min-height: 180px; place-items: center; align-content: center; gap: 9px; padding: 24px; color: var(--muted); font-size: var(--type-ui); text-align: center; }
@@ -362,6 +362,10 @@ textarea.form-control { min-height: 75px; resize: vertical; }
 }
 @media print {
   @page { margin: 12mm; }
+  html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+  .app-shell, .toast-region, .skip-link { display: none !important; }
+  #modalRoot { display: block; position: static; }
+
   body * { visibility: hidden !important; }
   #modalRoot, #modalRoot * { visibility: visible !important; }
   #modalRoot .modal-backdrop { position: static; display: block; padding: 0; background: #fff; backdrop-filter: none; }
@@ -372,13 +376,41 @@ textarea.form-control { min-height: 75px; resize: vertical; }
   #modalRoot .patient-chart-printable .table-wrap,
   #modalRoot .bill-printable .table-wrap { max-height: none; overflow: visible; border-color: #aab5bd; }
   #modalRoot .patient-chart-printable .data-table,
-  #modalRoot .bill-printable .data-table { width: 100%; min-width: 0; table-layout: auto; }
+  #modalRoot .bill-printable .data-table { width: 100%; min-width: 0; table-layout: fixed; }
   #modalRoot .patient-chart-printable .data-table th,
   #modalRoot .patient-chart-printable .data-table td,
   #modalRoot .bill-printable .data-table th,
-  #modalRoot .bill-printable .data-table td { padding: 5px 6px; font-size: 9pt; }
+  #modalRoot .bill-printable .data-table td { padding: 5px 6px; font-size: 9pt; white-space: normal; overflow-wrap: anywhere; }
   #modalRoot .patient-chart-printable .data-table tr,
   #modalRoot .bill-printable .data-table tr { break-inside: avoid; page-break-inside: avoid; }
   #modalRoot .patient-chart-printable .detail-card,
   #modalRoot .bill-printable .detail-card { background: #fff; border-color: #aab5bd; }
 }
+
+/* Personal role workspaces reuse the register visual language. */
+.identity-card { max-width: 480px; margin: 5vh auto; padding: 32px; background: white; border: 1px solid var(--border); border-radius: 16px; }
+.identity-card label { display: grid; gap: 7px; margin: 16px 0; font-weight: 600; }
+.workspace-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.role-controls { padding: 20px; margin: 18px 0; }
+.role-controls .form-grid { margin: 18px 0; }
+.role-controls #roleFilter { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.workspace-table { margin: 20px 0; padding: 14px; }
+.workspace-table h3 { text-transform: capitalize; }
+.workspace-table h3 small { font-size: 12px; color: var(--muted); margin-left: 10px; }
+.workspace-table td { max-width: 320px; white-space: normal; overflow-wrap: anywhere; }
+.work-alert { border-left: 4px solid #167c80; padding: 12px; background: #eef8f7; }
+#primaryNav button.nav-link { width: 100%; text-align: left; background: transparent; border: 0; cursor: pointer; }
+
+@media print {
+  #modalRoot .table-scroll-hint { display:none; }
+  #modalRoot [data-detail-section="items"] th:first-child { width:58%; }
+  #modalRoot [data-detail-section="items"] th:nth-child(2) { width:12%; }
+  #modalRoot [data-detail-section="items"] th:nth-child(3),
+  #modalRoot [data-detail-section="items"] th:nth-child(4) { width:15%; }
+  #modalRoot [data-detail-section="payments"] th:nth-child(2) { width:22%; }
+  #modalRoot [data-detail-section="payments"] th:nth-child(5) { width:25%; }
+  #modalRoot [data-detail-section="corrections"] th:nth-child(5) { width:28%; }
+  #modalRoot [data-detail-section="corrections"] th:nth-child(7) { width:20%; }
+}
+
+.role-controls .form-error:empty { display: none; }
