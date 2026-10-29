@@ -2,31 +2,59 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import secrets
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.exceptions import HTTPException
+from werkzeug.security import generate_password_hash
 
 from .api import ApiError, api
 from .database import DatabaseNotConfigured, OracleDatabase
 
-
 ROOT = Path(__file__).resolve().parent.parent
+_DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_urlsafe(32))
 
 
 def create_app(database: Any | None = None, test_config: dict[str, Any] | None = None) -> Flask:
     app = Flask(__name__, static_folder=str(ROOT / "static"), static_url_path="/static")
     app.config.from_mapping(
+        AUTH_REQUIRED=os.getenv("HMS_AUTH_REQUIRED", "true").lower() != "false",
+        SESSION_COOKIE_SECURE=os.getenv("HMS_COOKIE_SECURE", "false").lower() == "true",
+        DUMMY_PASSWORD_HASH=_DUMMY_PASSWORD_HASH,
+        HOSPITAL_TIMEZONE=os.getenv("HOSPITAL_TIMEZONE", "Asia/Kolkata"),
+        DEMO_USERNAME=os.getenv("DEMO_USERNAME", ""), DEMO_PASSWORD=os.getenv("DEMO_PASSWORD", ""),
         MAX_CONTENT_LENGTH=32 * 1024,
         JSON_SORT_KEYS=False,
         PROPAGATE_EXCEPTIONS=False,
     )
     if test_config:
         app.config.update(test_config)
+    if not app.config['AUTH_REQUIRED'] and not app.testing:
+        raise ValueError('AUTH_REQUIRED=False is restricted to explicit test harnesses.')
+    ZoneInfo(app.config["HOSPITAL_TIMEZONE"])  # fail startup for invalid policy
+    if bool(app.config["DEMO_USERNAME"]) != bool(app.config["DEMO_PASSWORD"]):
+        raise ValueError("Configure both DEMO_USERNAME and DEMO_PASSWORD, or neither when using personal authentication.")
+
+    @app.before_request
+    def demo_boundary():
+        if app.config["DEMO_PASSWORD"]:
+            auth = request.authorization
+            if not auth or not secrets.compare_digest((auth.username or "").encode(), app.config["DEMO_USERNAME"].encode()) or not secrets.compare_digest((auth.password or "").encode(), app.config["DEMO_PASSWORD"].encode()):
+                return jsonify({"error": {"code":"authentication_required", "message":"Demo access requires authentication."}}), 401, {"WWW-Authenticate": 'Basic realm="HMS synthetic demo"'}
+
     app.extensions["hms_database"] = database or OracleDatabase.from_environment()
     app.register_blueprint(api)
+    from .auth import install
+    install(app)
+    from .workflows import work
+    app.register_blueprint(work)
+    from .corrections import corrections
+    app.register_blueprint(corrections)
 
     @app.get("/")
     def index():
@@ -64,7 +92,7 @@ def create_app(database: Any | None = None, test_config: dict[str, Any] | None =
         oracle_code = _oracle_code(error)
         if oracle_code is not None:
             app.logger.warning("Oracle request failed (ORA-%05d)", oracle_code)
-            if oracle_code in (54, 30006):
+            if oracle_code in (54, 60, 30006):
                 return _error("resource_busy", "The scheduling resource is busy. Please retry.", 409)
             if oracle_code == 1:
                 return _error("conflict", "A record with one of these unique values already exists.", 409)
@@ -104,8 +132,16 @@ def create_app(database: Any | None = None, test_config: dict[str, Any] | None =
                 return _error("payment_history", "Payment history cannot be changed or deleted.", 409)
             if oracle_code == 20033:
                 return _error("overpayment", "Payment exceeds the outstanding balance.", 409)
+            if oracle_code in (20040, 20042, 20043):
+                return _error("history_or_projection_guard", "Retained history and derived state cannot be changed directly.", 409)
+            if oracle_code in (20201,20202,20203,20204,20210,20211,20212,20213):
+                return _error('care_integrity', 'Care history, stock, identity or finalization rule prevents this change.',409)
+            if oracle_code in (20041, 20044):
+                return _error("invalid_date_or_total", "Date or amount exceeds the supported policy.", 400)
             if oracle_code in (20011, 20012, 20013):
                 return _error("room_unavailable", "That room is not available for this operation.", 409)
+            if oracle_code in (942, 904):
+                return _error("schema_upgrade_required", "Database schema is not ready; complete the documented migrations.", 503)
             if oracle_code in (3113, 3114, 12170, 12514, 12541, 12545, 12547):
                 return _error("database_unavailable", "Oracle could not be reached. Check the database service and connection settings.", 503)
 
@@ -114,6 +150,8 @@ def create_app(database: Any | None = None, test_config: dict[str, Any] | None =
 
     @app.after_request
     def add_security_headers(response):
+        if request.path.startswith('/api/'):
+            response.headers['Cache-Control']='no-store'
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")

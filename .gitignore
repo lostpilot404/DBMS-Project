@@ -25,3 +25,23 @@ htmlcov/
 .serena/
 .playwright-cli/
 codegraph.json
+
+# Frontend verification dependencies / local evidence
+node_modules/
+test-results/
+
+# Disposable local databases and test/browser output, never application sources
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+playwright-report/
+blob-report/
+coverage/
+.mypy_cache/
+browser-profiles/
+/*.log

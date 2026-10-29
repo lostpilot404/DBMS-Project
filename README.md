@@ -1,231 +1,114 @@
 # Hospital Management System — BCSE302P
 
-A college Database Systems project built around an Oracle relational database, a small Flask service, and a responsive HTML/CSS/JavaScript interface. The repository initially contained only a placeholder README. The 13-page source report (`R1.pdf`) was supplied for the pre-publication audit; its extractable nine-table scope, key relationships, and 3NF objective were checked against the implementation. This implementation retains the nine entities and adds more detailed constraints and application workflows. The source report's diagram artwork and team/contact details are not reproduced here.
+An **academic, synthetic-data demonstration** using Oracle 12c+, Flask and plain JavaScript. Not a clinical system, payment processor, or production/real-patient-data service.
 
-## Architecture
+## Current status — 2026-10-29
 
-- **Database:** Oracle Database 12c or later; identity columns, check/unique/foreign-key constraints, virtual columns, admission-room triggers, and an appointment-state trigger.
-- **Backend:** Python 3.10+, Flask, official `python-oracledb` driver in Thin mode by default. Credentials are read from environment variables / a local `.env` file.
-- **Frontend:** semantic HTML, responsive CSS, and browser JavaScript served by Flask. Browser code calls only relative `/api/...` endpoints; it never connects to Oracle.
-- **Data flow:** browser → Flask JSON API → parameterized Oracle SQL. Mutations commit on success and roll back on error.
+Release verification and Git provenance: [canonical release assessment](docs/REPAIR_CAMPAIGN.md#final-release--2026-10-29). Teacher rehearsal: [guide §10](docs/MULTIUSER_GUIDE.md#10-teacher-rehearsal-without-oracle--explicit-test-fixture-only). Readiness is **Demonstration-ready with stated limitations**, not Oracle-certified.
 
-The nine core relations are **Department, Doctor, Patient, Appointment, Room, Admission, Medicine, Prescription,** and **Bill**; `Admission_Room_Stay` stores room assignment observations. Foreign keys use Oracle's default `NO ACTION`/restrict behavior: records with dependent history cannot be deleted by accident.
+The H01–H15 repair implementation spans database guards/migration, API, frontend, invoice printing, histories and documentation. **Live Oracle certification remains blocked:** no Oracle service/credentials are available here. Do not confuse Python test doubles or browser fixtures with persisted Oracle workflows. See [campaign results and remaining blockers](docs/REPAIR_CAMPAIGN.md), [manual matrix](docs/MANUAL_TEST_MATRIX.md), and [execution checklist](docs/superpowers/plans/2026-10-29-hms-repair.md).
 
-## Frontend design direction
+**Multi-user extension:** personal database-backed accounts and nine role workspaces are implemented, with connected outpatient and inpatient flows. Default authentication is ON; there are no default production credentials. See the [setup / roles / workflow guide](docs/MULTIUSER_GUIDE.md) and [tested / partial / blocked status matrix](docs/REPAIR_CAMPAIGN.md). This is not “complete because login works”: retained amendments, order cancellation, stock return/quarantine/write-offs and controlled financial corrections are implemented; Oracle execution is still blocked.
 
-The product-specific hierarchy, visual tokens, compliance review, and verification limits are documented in [`docs/FRONTEND_DESIGN.md`](docs/FRONTEND_DESIGN.md). The full supplied acceptance playbook is preserved at [`docs/FrontEnd.md`](docs/FrontEnd.md).
+## Architecture and contracts
 
-The interface is an educational **hospital administration/operations** app, not a patient portal, clinical decision tool, or live hospital service. Its visual hierarchy prioritizes the records staff need to act on—today's appointment queue and upcoming visits, active admissions, available rooms, and pending bills—then presents register and payment totals as supporting context. Every figure is rendered from the existing dashboard API response; an unavailable database produces an error state, not sample KPI values, trend claims, or assumed identities.
+- Browser → same-origin `/api/...` → parameterized Oracle SQL. Successful writes commit; failures roll back.
+- **v6 base + additive007/008:** the existing14-table model is reused, not replaced.007 adds16 staff/identity/clinical/operational tables and links existing Prescription/Bill. 008 adds seven corrective-event/cutover tables. Planned source inventory:37 tables,31 identity columns,66 FKs,92 triggers; **not live Oracle metadata evidence**. Original migrations001–005 and the prior repair campaign are preserved. See [extension relationships](docs/MULTIUSER_MODEL.mmd).
+- **Admission is authoritative:** room occupancy and retained assignment observations are projections. Direct projection edits are rejected. Former rooms remain discoverable after transfer. A legacy observation is not an invented transfer or known effective interval.
+- **Scheduling:** 1–1440-minute visits ending by midnight; half-open doctor **and patient** overlap checks across active states, with adjacent visits permitted. Scheduled → Checked In → Waiting → In Consultation → Completed; cancellation/no-show rules are enforced in API and SQL. Change booking and status separately. Terminal history is read-only.
+- **Finance:** `V_Invoice_Balances` computes net billed from base + items + debits − credits/refund-price-credits/write-offs/voids, and net paid from original receipts − cash refunds; outstanding is net billed − net paid. Historical Paid/Pending labels never create receipts. Zero-value invoices are Paid with zero receipts. Dashboard, registers, histories, reports, CSV and print use ledger values. Monthly collections use **receipt recording month**, while outstanding amounts are grouped by invoice month, not accounting revenue recognition.
+- **Exact money:** JSON money fields are decimal strings; Oracle driver fetches Decimal; JS formats/sums BigInt cents. Each price/charge/payment ≤99,999,999.99; item quantity ≤100,000; line total ≤99,999,999.99; invoice total ≤999,999,999.99.
+- Payment POSTs require a UUID key. Same normalized bill/amount/method/reference returns the original ID (HTTP 200 replay); changed payload with that key returns 409. The browser stores unresolved requests in localStorage **before sending**, retaining key/payload across close/reload, including a lost response after full settlement. Retry original details; do not submit a second payment elsewhere. Storage failure prevents submission. This records an administrative receipt, not a gateway transaction.
+- Invoice date, patient and legacy label are immutable on edit. Base/items lock after any payment; notes remain editable. 008 retains originals and records manager-authorized credits/debits/refunds/write-offs; voiding is limited to unpaid administrative invoices. Cashier refunds require a recorded billed medicine return and its uncredited original-price value.
+- Clinical dates are hospital-local **day-only** values, default `Asia/Kolkata`; Python, JS and Oracle use that policy. `/api/health` checks database timezone/version against API configuration; `/api/config` exposes UI policy. New payment timestamps are UTC; upgraded timestamps remain explicitly `LEGACY_UNKNOWN`. Room-history timestamps retain server-local observational semantics, **not** recovered effective clinical times.
+- A bounded singleton write mutex is taken before entity locks, including BEFORE STATEMENT SQL triggers. This intentionally serializes writes for an academic workload; not a high-throughput hospital design. Lock timeout/deadlock responses are retryable 409. Supported direct writers must acquire this mutex before any explicit entity `SELECT FOR UPDATE`; privileged/manual locks can still cause conflicts.
+- Legacy prescriptions remain **single-medicine instructions**, not evidence of dispensing. New quantity/context orders use explicit batch dispensing with a durable UUID, stock decrement and source-linked invoice charge in one transaction. No historical stock is assigned invented batches. Generic unjournaled stock changes are blocked for personal accounts. 008 records batch receipts/returns/quarantine/write-offs/count corrections; historical stock is an observed cutover snapshot, not invented receipts.
 
-The UI uses a restrained navy/teal system, the platform's system font, stronger text/control contrast, and shared 12/13/14px text tokens. Dense records stay in semantic tables; narrow screens can scroll each table in a labeled, keyboard-focusable region rather than silently dropping columns. The appointment agenda reflows at small widths, and the dated queue labels its booked-time ordering while explicitly noting that arrival order and triage priority are not recorded. Desktop navigation remains persistent; mobile navigation is an overlay with a backdrop, Escape handling, focus return/trapping, and an inert closed drawer. Focus rings and reduced-motion preferences are supported in CSS.
+## Oracle setup and migration
 
-These are implemented design decisions, not a completed accessibility certification or visual QA sign-off. Browser-specific rendering and assistive-technology behavior still need review in a real browser/device setup; see the verification boundary below.
+**Read [the migration/recovery runbook](docs/MIGRATION_RUNBOOK.md) first.** Use only disposable/demo schemas; stop every writer and back up before DDL. Oracle DDL commits implicitly; a script's ROLLBACK cannot undo completed DDL.
 
-## Repository map
+Fresh owner schema (CREATE TABLE/VIEW/TRIGGER/PROCEDURE privileges and tablespace quota):
 
-```text
-sql/01_create_schema.sql      Non-destructive schema and integrity triggers
-sql/02_sample_data.sql       Fictional, repeat-safe demo rows
-sql/03_useful_queries.sql    Views, reports, and commented DML examples
-sql/04_verification.sql     Dictionary/constraint/relationship checks
-hms/                         Flask API, Oracle connection pool, validation
-static/                      HTML, CSS, and JavaScript UI
-tests/                       Test-double checks plus opt-in live Oracle integration tests
-docs/PROJECT_REPORT.md       Submission-oriented technical report
-docs/MANUAL_VERIFICATION_LOG.md  Current live-server evidence and blocked manual checks
-docs/FRONTEND_DESIGN.md      Frontend direction, compliance, and verification limits
-docs/FrontEnd.md             Full supplied frontend acceptance playbook
-docs/ER_DIAGRAM.mmd          Editable Mermaid ER diagram
-.env.example                 Safe configuration template
+```sql
+@sql/01_create_schema.sql
+@sql/02_sample_data.sql
+@sql/migrations/007_multiuser.sql
+@sql/migrations/008_corrections.sql
+@sql/03_useful_queries.sql
+@sql/04_verification.sql
+@sql/09_multiuser_verification.sql
+@sql/11_corrections_verification.sql
 ```
 
-## Oracle setup
+01 includes `05_integrity_objects.sql` and executable invariants. Do not run001–006 on a fresh v6 installation; **do apply007 and008 once each** for the personal-account app. Seed is same-day repeat-safe, not a concurrent seed service or a reset; it never deletes records or fabricates receipts for legacy Paid labels.
 
-Use an Oracle 12c+ schema/user with permission to create tables, views, and triggers and sufficient tablespace quota. Identity sequences and constraint indexes are managed by Oracle. Run the website with a schema that can read and write these project tables. Do not use a production account. Configure the database account locally; do not put its password in source control.
+Existing supported baseline: apply **only missing** migrations in order 001 → 002 → 003 → 004 → 005 → **006_integrity_repair.sql** → **007_multiuser.sql** → **008_corrections.sql**, then03,04,09 and11. 006 runs preflight data/metadata checks **before** DDL and refuses an already/partly installed v6. Existing contradictory data is a blocker for operator review, not silently repaired or deleted. Fresh/upgrade corrective object definitions are shared; their live metadata equivalence has **not** been executed here.
 
-1. Connect to the target Oracle service with SQL*Plus or SQLcl:
+Use a separate restricted runtime account: owner runs `sql/07_runtime_grants.sql` plus `sql/08_multiuser_grants.sql` and `sql/10_corrections_grants.sql` for an already provisioned login. Set `ORACLE_SCHEMA` to owner when connecting as runtime. **Never grant `HMS_Internal`, DDL or broad ANY/owner privileges** to runtime. An owner/DBA can disable guards; this is not an owner-proof security boundary.
 
-   ```sh
-   sqlplus hms_app@//localhost:1521/FREEPDB1
-   ```
-
-   SQL*Plus prompts for the password. The Easy Connect service name is an example; substitute your database's host, port, and service name.
-
-2. At the SQL prompt, run the scripts in order:
-
-   ```sql
-   @sql/01_create_schema.sql
-   @sql/02_sample_data.sql
-   @sql/03_useful_queries.sql
-   @sql/04_verification.sql
-   ```
-
-   `01_create_schema.sql` intentionally does **not** drop or replace tables. It is for a new schema and will fail rather than destroy an existing schema. This four-script setup is not an in-place migration: earlier project schemas have a smaller appointment-status constraint/slot rule, and no upgrade migration is shipped. Do not point the updated app at an older schema; use a fresh project schema or obtain and review a safe migration first. `02_sample_data.sql` uses fictional records and `NOT EXISTS` checks so rerunning it on the same day does not add duplicate demo rows. It does not delete existing data. Queries in script 03 include report views and read-only examples; its UPDATE/DELETE examples are commented until deliberately run with a chosen key.
-
-3. You can also run a single script from a shell (the password is prompted for, not embedded in the command):
-
-   ```sh
-   sqlplus hms_app@//localhost:1521/FREEPDB1 @sql/01_create_schema.sql
-   ```
-
-   Repeat with the remaining script names. SQL*Plus and a reachable Oracle service are required; they are not included in this repository.
-
-There is no automatic reset script. If a clean database is required, use a newly created disposable Oracle schema rather than dropping project tables.
-
-## Dedicated Oracle integration-test schema
-
-The live integration suite is opt-in and must use a **fresh, disposable schema** in a non-production Oracle PDB. It creates only uniquely named synthetic rows and cleans up the rows it created; it never drops tables or truncates data. Use a test-only database account, never an application or production account. The suite refuses to connect unless `ORACLE_USER`, Oracle `SESSION_USER`, and `CURRENT_SCHEMA` are all exactly `HMS_ORACLE_TEST`, and it also requires a separate explicit disposable-schema acknowledgement.
-
-1. As a local PDB administrator (not the app user), create a new schema. Replace the password and tablespace names locally; `USERS`/`TEMP` are examples and vary by Oracle installation:
-
-   ```sql
-   CREATE USER HMS_ORACLE_TEST IDENTIFIED BY "replace-with-a-random-local-secret"
-     DEFAULT TABLESPACE users
-     TEMPORARY TABLESPACE temp
-     QUOTA 100M ON users;
-   GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE TRIGGER TO HMS_ORACLE_TEST;
-   ```
-
-2. Connect as `HMS_ORACLE_TEST` to the chosen non-production PDB and run all four setup scripts, in order, from the repository root:
-
-   ```sql
-   @sql/01_create_schema.sql
-   @sql/02_sample_data.sql
-   @sql/03_useful_queries.sql
-   @sql/04_verification.sql
-   ```
-
-   Review the verification output and confirm the schema objects are enabled before running tests. Do not point this procedure at a shared or production schema.
-
-3. Set `.env` to the test-only account (`ORACLE_USER=HMS_ORACLE_TEST`, its local password, and that non-production PDB's DSN). Then explicitly opt in and acknowledge the disposable schema.
-
-   Linux/macOS:
-
-   ```sh
-   export HMS_ORACLE_INTEGRATION=1
-   export HMS_ORACLE_TEST_ACK=I_CONFIRM_HMS_ORACLE_TEST_IS_DISPOSABLE
-   python -m unittest discover -s tests -p 'test_oracle_integration.py' -v
-   ```
-
-   Windows PowerShell:
-
-   ```powershell
-   $env:HMS_ORACLE_INTEGRATION = "1"
-   $env:HMS_ORACLE_TEST_ACK = "I_CONFIRM_HMS_ORACLE_TEST_IS_DISPOSABLE"
-   python -m unittest discover -s tests -p 'test_oracle_integration.py' -v
-   ```
-
-   The tests use the actual `python-oracledb` driver and Oracle database, not SQLite or an Oracle mock. Before writing, the suite requires the configured user, Oracle `SESSION_USER`, and `CURRENT_SCHEMA` to equal `HMS_ORACLE_TEST`; the acknowledgement is also mandatory. It checks schema metadata, constraints, generated bill totals, appointment-slot uniqueness (including two concurrent sessions), admission/room triggers, deletion restrictions, and atomic stock changes. Setup/teardown deletes only synthetic rows linked to IDs created by each test instance. If a run is interrupted, inspect uniquely named `Oracle IT` / `IT-...` rows in the dedicated test schema before manually cleaning them; the suite never drops schema objects. Do not run these commands against any shared or production PDB.
-
-## Configure and launch the website
-
-From the repository root, use the commands for your shell.
-
-Linux/macOS:
+## Configure and run
 
 ```sh
 python -m venv .venv
 . .venv/bin/activate
-python -m pip install -r requirements.txt
+pip install -r requirements.txt
 cp .env.example .env
-```
-
-Windows PowerShell:
-
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-```
-
-Edit `.env` locally. Set `ORACLE_USER`, `ORACLE_PASSWORD`, and either `ORACLE_DSN` or `ORACLE_HOST`, `ORACLE_PORT`, and `ORACLE_SERVICE_NAME`. The example uses the Oracle Free PDB service `FREEPDB1`; use the actual service name provided by your Oracle installation. `python-oracledb` uses Thin mode by default, so Oracle Instant Client is not needed for a standard TCP Oracle connection.
-
-Start the app:
-
-```sh
+# Edit .env locally: ORACLE_USER, ORACLE_PASSWORD, ORACLE_DSN; optional ORACLE_SCHEMA.
+# Install/verify the schema as owner first. Then, once, at the local console:
+flask --app app init-manager
+# Prompts for your chosen username and password; refuses when accounts exist.
 python app.py
 ```
 
-Open <http://127.0.0.1:5000>. Set `PORT` to change the port. `FLASK_DEBUG=true` enables the development reloader and should only be used locally. The dashboard and modules read live database data; with no configured/reachable Oracle database, the interface displays a connection error rather than fabricated statistics.
+Default: <http://127.0.0.1:5000>, loopback only, debug off. No DB produces structured 503 errors, not fabricated data. `HOSPITAL_TIMEZONE` must match `HMS_Settings.hospital_timezone`; change both during a stopped-writer maintenance window. Supported initial migration policy is Asia/Kolkata.
 
-## Module feature matrix
+Non-loopback `HMS_HOST` requires **`HMS_COOKIE_SECURE=true`**, personal authentication and an HTTPS reverse proxy; debug is refused. Apply the same secure-cookie requirement when deploying through a separate WSGI server. Optional `DEMO_USERNAME`/`DEMO_PASSWORD` protect pages/assets/API as an additional shared Basic-auth boundary, **not** as a replacement for personal roles. Do not expose the development server publicly. This is not encryption-at-rest, privacy compliance, production identity or payment-gateway security. Never put credentials in chat or Git.
 
-| Area | Implemented workflow | Integrity / history rules |
-|---|---|---|
-| Dashboard | Oracle-backed counts including today's active appointment queue, upcoming appointments, outstanding bills, low-stock medicines, recent dated records, module links, and an explicit refresh action. | No demo/fabricated statistics; a disconnected database shows an error state. |
-| Departments | Create, edit, search, sort, paginate, inspect associated doctors, and delete only when unreferenced. | Unique department name; doctor foreign keys prevent destructive parent deletion. |
-| Doctors | Create/edit profiles, choose a department, search/filter/sort/page, inspect appointments and prescriptions, and delete only when unreferenced. | Required department FK; phone/email validation and optional unique values. |
-| Patients | Register/edit, search/filter by gender/blood group, sort/page, and review a newest-first chart that merges appointments, admissions/discharges, prescription instructions, and bills; print the chart. | Date/phone/blood-group validation; dependent foreign keys protect history. The chart labels stored administrative facts only and disclaims diagnosis, triage, and dispensing records. |
-| Appointments | Book/reschedule scheduled visits; search/filter/date-range/sort/page; table, date-grouped agenda, or dated/doctor-filtered queue; check in, wait, begin/complete a consultation, cancel, or mark an overdue visit No-show. | Doctor and patient slot uniqueness across all active states; only Scheduled visits may be rescheduled; check-in is limited to the appointment date and No-show to a past date; terminal records are read-only and cannot be deleted through the app. |
-| Rooms | Create/edit room details; search/filter/sort/page and inspect admissions. | Availability is synchronized with admission; manual Occupied state is disallowed. |
-| Admissions | Admit to an available room, move an active stay to another available room, review stay history, discharge/release, and search/filter/date-range/sort/page. | One active admission per patient/room; room moves/discharge update occupancy and append room history via triggers (Oracle execution unverified). Legacy history before migration cannot be reconstructed. |
-| Medicines | Create/edit catalogue, search/filter low stock/sort/page, inspect prescriptions, and add/remove stock. | Nonnegative stock; atomic stock adjustment; direct stock editing is rejected; manual adjustments are not dispense records and prescriptions do not consume stock. |
-| Prescriptions | Create/edit instructions with patient/doctor/medicine relations; search/filter by related record/date and page; inspect details. | Required foreign keys and bounded fields; patient ownership cannot be edited; prescription history cannot be deleted through the app. |
-| Billing | Create/edit charge components and payment status; search/filter patient/status/date, page, inspect and print a bill. | Oracle-computed total; nonnegative charges; patient ownership cannot be edited; paid/pending is a label, not a payment ledger. |
-| Reports | Twelve database queries for joins, appointments/schedules, admission history/current occupancy, inventory, prescriptions, bills, monthly revenue, and grouped summaries; filter and paginate; export every row matching current filters to CSV. | Static, parameterized query definitions; CSV neutralizes formula-prefixed text; export is independent of the visible page; totals mean bills marked Paid/Pending, not gateway settlements. |
-| Shared UX | Related-record dropdowns with type-to-filter, required-field checks, reset, inline errors/toasts, confirmations, modal Escape/focus handling, responsive CSS, print-ready patient/bill records, and safe HTML escaping. | All browser calls use same-origin Flask endpoints; no Oracle credentials or SQL in browser code. |
+## Workflow matrix
 
-**Verification boundary:** this matrix describes implemented source behavior. Fake-Oracle tests exercise backend request/query construction and jsdom exercises rendered DOM/event behavior with mocked API payloads. They do not verify Oracle execution, concurrency, visual layout in a real browser, or a live end-to-end workflow.
+| Area | Implemented controls and retained facts |
+|---|---|
+| Department / doctor / patient | Create/edit, relationships, search/filter/sort/page, details; FK-restricted master deletion. Department register previews first five names; details shows full list. Patient chart/print combines visits, admissions, observations, prescriptions and ledger invoices. Identity matching/automatic deduplication is not provided. |
+| Appointments | Book/reschedule, duration, table/agenda/dated queue, doctor/patient filters, lifecycle actions, terminal retention and released time slots. |
+| Rooms / admissions | Available-room admission, transfer, discharge, projection guards, former occupants and observation history; no invented pre-migration transfers. |
+| Clinical / pharmacy / lab | Scoped consultation diagnoses/notes, explicit quantity orders, batch receipt/expiry/low stock, idempotent dispensing, ordered tests and retained results. Legacy instructions never prove dispensing. New clinical facts are retained, not overwritten. |
+| Billing | Create base charges, notes, item add/edit/remove while unpaid, partial/full receipts, durable retry, ledger totals, complete printable invoice/receipt history. Reasoned corrective events and linked refunds retain receipts; original receipt mutation remains forbidden. |
+| Reports | **14** allowlisted queries, filtering/date ranges/pagination; CSV exports all matching rows independently of visible page and neutralizes formula-prefixed strings. |
+| Personal roles | Manager, doctor, patient, reception, nurse, pharmacist, cashier, lab and maintenance workspaces; server-enforced scopes, CSRF, revocable sessions, persisted counts/queues/alerts, search/page and permitted actions. See full matrix; not all advanced hospital features are supplied. |
+| Shared UI | Same-origin calls; escaped text; inline errors; refresh; modal keyboard controls; narrow-screen tables; print styling. Not a completed accessibility/device certification. |
 
-## Verification and tests
-
-Run the automated tests and JavaScript syntax check (activate `.venv` first):
+## Verification
 
 ```sh
-python -m unittest discover -s tests -v
+python -B -m unittest discover -s tests -v
 node --check static/app.js
+node --check static/workspace.js
+npm ci --ignore-scripts
+npm test
+npm run test:browser
+npm run test:roles
 ```
 
-**Current regression and live-server checks (2026-10-28):** `.venv/bin/python -m unittest discover -s tests -v` ran 45 tests: 38 passed (35 fake-database/API/validation/helper tests and three Oracle safety-guard unit tests); seven opt-in live-Oracle integration tests were skipped. Python compilation, `node --check static/app.js`, and `git diff --check` passed. The actual Flask development server was started on `0.0.0.0:5000`; HTTP requests to `/`, the CSS, JavaScript, and favicon returned 200. Requests to `/api/health`, `/api/dashboard`, `/api/options`, `/api/departments`, the dated appointment queue, and a report endpoint returned structured HTTP 503 `database_unavailable` responses because no Oracle configuration/service was available. These were HTTP requests, not browser navigation or UI/CRUD evidence; see [`docs/MANUAL_VERIFICATION_LOG.md`](docs/MANUAL_VERIFICATION_LOG.md) for the exact requests and feature-by-feature unverified list.
+Node 22+ is needed for the pinned browser verification packages. The Chromium helper extracts its own Linux runtime libraries outside Git. `test:browser` uses real Chromium with intercepted synthetic APIs for legacy registers. `test:roles` uses the **actual Playwright CLI and real Flask HTTP server**, with a persisted test-only SQLite compatibility fixture (workflow API payloads are not mocked; the logout-race test delays a real response), covering all roles, registration through outpatient payment/PDF, inpatient transfer/discharge/payment, maintenance and logout races. Neither is live-Oracle E2E; no SQLite production fallback exists. See the canonical campaign report for exact counts, RED→GREEN observations and final command results. For an explicitly labelled disposable SQLite rehearsal (never an Oracle fallback), see guide §10.
 
-**Earlier mocked/static checks (2026-10-27):** CSS parsing/custom-property checks and HTML parsing/duplicate-ID checks passed. A temporary jsdom interaction smoke made 79 mocked API calls and exercised the dashboard/unavailable state, all nine modules, all twelve reports, related-record selectors, search/sorting/pagination, a mocked create payload, appointment table/agenda/queue modes and lifecycle actions, the patient timeline and print action, filtered CSV download, and mobile-drawer state at 390px/1024px. This was DOM/event verification only, not browser rendering or an Oracle-backed workflow. Selected source-color measurements reported 4.65:1 for sidebar normal text and 3.52:1 for input borders; these are not a complete WCAG audit. No live Oracle or real browser was available: DDL execution, rendered screenshots, real-device/zoom/reflow, assistive-technology behavior, browser console/network inspection, and live CRUD/workflows remain unverified.
+Opt-in Oracle tests require an account named **exactly `HMS_ORACLE_TEST`**, matching session/current schema, initialized at v6 (or v6+007+008), and:
 
-**Real-Oracle integration:** after preparing the dedicated schema above, run the opt-in suite with `HMS_ORACLE_INTEGRATION=1`. Do not count skipped tests as Oracle verification. Run `@sql/04_verification.sql` after schema/data setup and review its output.
+```sh
+export HMS_ORACLE_INTEGRATION=1
+export HMS_ORACLE_TEST_ACK=I_CONFIRM_HMS_ORACLE_TEST_IS_DISPOSABLE
+python -B -m unittest tests.test_oracle_integration -v
+```
 
-### Audit evidence for this workspace
+For personal-role/corrective/race tests, install007+008 and verify09+11 and also run:
 
-| Evidence class | Result |
-|---|---|
-| **Real Oracle** | **Not run / unverified.** No Oracle credentials, `.env`, SQL*Plus/SQLcl, or local Oracle listener were available in this workspace. No SQL file or integration test was executed against Oracle. A Flask test-client check without database configuration returned the expected structured HTTP 503, which is not live-database evidence. |
-| **Automated / test doubles** | Latest unittest run: 45 tests, comprising 35 fake-database/API/validation/helper passes, three Oracle safety-guard unit-test passes, and seven skipped live-Oracle tests. The temporary jsdom smoke used mocked API responses (79 calls); responsive checks observed DOM state only. These do not verify live Oracle or real-browser layout. |
-| **Static-only** | Reviewed the SQL, API, frontend field definitions, tests, README, report, and ER diagram. The static model has nine tables, nine identity columns, nine foreign keys, one appointment-state trigger, and three admission triggers; conditional unique keys protect appointment slots in all active workflow states and active admissions. Seed statements were checked for dependency order and slot-conflict guards; no Oracle parser or compiler was available. |
-| **Unverified** | Oracle 12c+ DDL/trigger compilation, seed execution, constraint/virtual-column behavior, actual concurrent sessions, live Flask-to-Oracle CRUD, browser-to-Oracle flows, and real-browser visual layout. The extractable scope/schema/relationship text in `R1.pdf` was compared; its diagram artwork and team/contact allocation were not reproduced or compared. |
+```sh
+export HMS_MULTIUSER_ORACLE_INTEGRATION=1
+python -B -m unittest tests.test_multiuser_oracle -v
+```
 
-For the exact Oracle test procedure and manual verification checklist, see [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md), the current evidence/limitations in [`docs/MANUAL_VERIFICATION_LOG.md`](docs/MANUAL_VERIFICATION_LOG.md), and the dedicated schema instructions above.
+Both switches and the exact acknowledgement are required. These additional live tests are supplied but **not executed here**. Set credentials locally; no important schema. Tests retain synthetic clinical/financial history, finalize only their own active stays, and never disable guards/drop objects. Recreate the dedicated disposable schema outside the test harness between campaigns if a clean database is needed. Skips are not passes. Oracle concurrency, fresh/upgrade execution and restricted-runtime grants still need lab evidence. Chromium PDF receipt rendering is tested; physical printing is not.
 
-## Project documentation
+## Files and historical evidence
 
-See [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md) for the data dictionary, key relationships, 3NF rationale, integrity rules, testing limitations, and manual demonstration checklist. The current live-server evidence, per-module/report status, and defect log are recorded in [`docs/MANUAL_VERIFICATION_LOG.md`](docs/MANUAL_VERIFICATION_LOG.md). The Mermaid source of the implemented ER model is [`docs/ER_DIAGRAM.mmd`](docs/ER_DIAGRAM.mmd).
-
-## Independent audit and verification boundary
-
-See [hostile audit](docs/HOSTILE_AUDIT_REPORT.md), [model assessment](docs/DATABASE_MODEL_AUDIT.md), [defect register](docs/DEFECT_REGISTER.md), and [blocked live test matrix](docs/MANUAL_TEST_MATRIX.md). Historical patient associations and room-transfer history have unresolved integrity risks; paid status is not evidence of a payment. Do not use this application with real patient or financial data. Creating an admission through the API now requires an active admission; use the discharge action separately. This is an API-only safeguard, not a database migration or proof against direct SQL.
-
-### Ownership guard upgrade
-
-Fresh schemas created with `sql/01_create_schema.sql` include bill and prescription patient-ownership triggers. Existing schemas that already match the baseline can be upgraded separately with `@sql/migrations/001_patient_ownership.sql` after backup and rehearsal in a fresh disposable schema; review both object status and `USER_ERRORS`. Oracle DDL commits implicitly, and the migration is **not tested on Oracle**. It does not repair existing incorrect associations or upgrade older incompatible schema versions. API edit requests must omit `patient_id` even when unchanged; other bill/prescription fields remain editable. See [room history design](docs/ROOM_HISTORY_DESIGN.md) for historical context and the implementation notes below.
-
-### Room history upgrade (Oracle execution not verified)
-
-Fresh schemas created by the updated `sql/01_create_schema.sql` include `Admission_Room_Stay` and the synchronization trigger. Existing baseline schemas require `@sql/migrations/001_patient_ownership.sql` and then `@sql/migrations/002_room_history.sql` before running the updated app or reports. Do not run the upgrade against an important schema: first stop all writers, back up, and rehearse on a fresh disposable copy. Migration 002 checks for active-room inconsistencies and duplicates and deliberately fails if its objects already exist. Oracle DDL commits implicitly; a failure may leave partial objects and requires inspection/recovery, not blind retry. Run `@sql/04_verification.sql`, inspect `USER_ERRORS`, then run dedicated live integration tests before reopening writers. The migration and triggers have not been executed in this environment.
-
-Migration creates one LEGACY snapshot of the last known room per existing admission, with unknown start/end; previous transfers cannot be recovered. New operations record server transaction times, not necessarily the effective time of a backdated admission or discharge. The Admission row stores the current/last room for existing queries; triggers update history and room status in the same statement. Direct writes to Room or the history table can still bypass this policy: use the application only and restrict database privileges appropriately. Admission details and the room-assignment report show the observations; `/api/patients/<id>/room-history` returns all stored observations for a patient.
-
-Invoice item/payment history has been added separately; see Bill ledger below. Direct scheduling and ledger trigger behavior remains unverified on Oracle.
-
-### Appointment-duration upgrade and verification limit
-
-New appointments default to 30 minutes; the form permits 1–1440 minutes but appointments must finish by midnight. The Flask create/reschedule path locks the doctor row for up to five seconds, then checks half-open intervals on the same date and transaction. Scheduled, Checked In, Waiting and In Consultation block overlapping times; Completed, Cancelled and No-show release them. Back-to-back visits are allowed. The database still independently checks exact slots. Fresh schema and migration 004 add a database compound trigger intended to check overlaps for direct SQL as well. Its compilation, locking behavior and concurrency safety have not been verified on Oracle; do not treat it as a proven database-wide guarantee. Oracle locking, deadlocks, timeout handling, constraint compilation, migration and concurrency are NOT TESTED here.
-
-For an existing baseline schema: stop all writers, back up, rehearse migrations `001`, `002`, then `003_appointment_duration.sql` and `004_appointment_overlap.sql` on a disposable copy, and review 04 verification and `USER_ERRORS` before starting the new app. Migration 003 assumes every old appointment had a 30-minute duration, a policy approximation rather than known history. It stops before DDL if an active doctor overlap or end-after-midnight exists under that assumption, or if the column already exists. Resolve discrepancies deliberately rather than blind reruns. Oracle DDL commits implicitly and partial installation requires inspection and recovery from backup; none of these migrations has been run in this environment. Fresh `01_create_schema.sql` already includes duration and does not need migration 003.
-
-Room state is still duplicated: `Admission.room_id` is the write source, Room status and room history are trigger-maintained. Direct SQL against Room or `Admission_Room_Stay` can bypass synchronization. The triggers access different tables, and no explicit query of a mutating Admission table was identified, but Oracle trigger/FK behavior remains unverified. Stop writers and check both missing active histories and orphan/mismatched active histories using `sql/04_verification.sql`; expected counts are zero. Migration 002 backfills one last-known LEGACY snapshot per admission; overwritten prior room assignments and times cannot be recovered. Inspect all trigger statuses and row counts and rehearse admit/transfer/discharge and rollback before using the application. Migration 002 cannot be blindly rerun after partial DDL; migration 001 replaces triggers of the same names. No database-wide protection against bypass, no payment transactions or itemized invoices, and no live browser or Oracle tests are claimed.
-
-Migration 004 validates existing active intervals before creating an index and compound trigger. The trigger collects old and new doctor IDs for each statement, locks their doctor rows in sorted order, then checks overlaps after the statement rather than querying the mutating table per row. This design assumes READ COMMITTED isolation. A deadlock or lock timeout can abort a transaction; retry only after rollback. Neither the trigger nor migration has run against Oracle; inspect `USER_ERRORS` and perform direct SQL, multi-row, update and concurrency tests on a disposable schema. Existing migration scripts are unchanged.
-
-### Bill ledger (implementation not verified on Oracle)
-
-New `Bill_Item` and `Bill_Payment` tables supplement the original three Bill charge categories. Open bill details → Items and payments to add/edit/remove additional items before the first recorded payment and to record separate partial payments. The Invoice balances report calculates original category charges plus additional lines less recorded payments. The old `Paid`/`Pending` field, dashboard tiles and legacy status/monthly reports remain legacy labels and do **not** represent payment history. A legacy Paid label is not migrated into a fabricated payment. Original charge categories and item edits are locked once an actual payment is recorded. Payments are append-only; refunds, reversals and cancellation are not implemented. Payment requests require a UUID idempotency key; reusing that key is rejected, although submitting a new key can record another payment. Do not use this as a financial ledger without resolving these limitations.
-
-Fresh schemas include the ledger; existing baseline schemas need `001` through `005_bill_ledger.sql` in order, after backup and rehearsal on a disposable schema with all writers stopped. Migration 005 leaves all legacy amounts and statuses unchanged and creates no historical payments. Oracle DDL commits implicitly; failed partial migration must be inspected/recovered and not blindly rerun. Inspect `USER_OBJECTS`/`USER_ERRORS`, `sql/04_verification.sql` (expected overpayments zero), and run live trigger, transaction, concurrency and report reconciliation tests before use. **No migration, trigger or payment has been tested against Oracle here.** Direct Room/history SQL writes may still violate occupancy synchronization.
+SQL01–12 and migrations contain schema, samples, reports, assertions and runtime grants. `hms/` is Flask/Oracle; `static/` is UI; `tests/` contains fake/unit, DOM, real-browser-fixture and opt-in Oracle checks. [Project report](docs/PROJECT_REPORT.md), [ER model](docs/ER_DIAGRAM.mmd), [defect register](docs/DEFECT_REGISTER.md) and runbook describe v6. Older audit/design records are explicitly historical; they do not override current code or certify Oracle.

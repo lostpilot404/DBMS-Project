@@ -589,3 +589,6 @@ END;
 /
 
 PROMPT Schema objects created. Run @sql/04_verification.sql to inspect them.
+
+-- Corrective objects shared with migration 006.
+@@05_integrity_objects.sql

@@ -1,5 +1,5 @@
 -- Fictional, repeat-safe demonstration data. No DROP or DELETE statements.
--- Date expressions are relative to SYSDATE so upcoming appointments stay useful.
+-- Date expressions are relative to HMS_Today() so upcoming appointments stay useful.
 SET DEFINE OFF
 WHENEVER SQLERROR EXIT SQL.SQLCODE ROLLBACK
 
@@ -107,30 +107,30 @@ SELECT 'Vitamin D3 1000 IU', 'Hillview Healthcare', 4.00, 0 FROM dual
 -- Appointments: two upcoming visits, one completed through the valid lifecycle,
 -- and one cancelled example. Active-slot checks include every in-progress status.
 INSERT INTO Appointment (patient_id, doctor_id, appointment_date, appointment_time, status)
-SELECT p.patient_id, d.doctor_id, TRUNC(SYSDATE) + 1, '09:00', 'Scheduled'
+SELECT p.patient_id, d.doctor_id, HMS_Today() + 1, '09:00', 'Scheduled'
   FROM Patient p CROSS JOIN Doctor d
  WHERE p.phone = '+91-90001-20001' AND d.email = 'meera.raman@example.test'
    AND NOT EXISTS (SELECT 1 FROM Appointment a
                     WHERE a.doctor_id = d.doctor_id
-                      AND a.appointment_date = TRUNC(SYSDATE) + 1
+                      AND a.appointment_date = HMS_Today() + 1
                       AND a.appointment_time = '09:00'
                       AND a.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation'))
    AND NOT EXISTS (SELECT 1 FROM Appointment a
                     WHERE a.patient_id = p.patient_id
-                      AND a.appointment_date = TRUNC(SYSDATE) + 1
+                      AND a.appointment_date = HMS_Today() + 1
                       AND a.appointment_time = '09:00');
 INSERT INTO Appointment (patient_id, doctor_id, appointment_date, appointment_time, status)
-SELECT p.patient_id, d.doctor_id, TRUNC(SYSDATE) + 2, '10:30', 'Scheduled'
+SELECT p.patient_id, d.doctor_id, HMS_Today() + 2, '10:30', 'Scheduled'
   FROM Patient p CROSS JOIN Doctor d
  WHERE p.phone = '+91-90001-20002' AND d.email = 'kavya.iyer@example.test'
    AND NOT EXISTS (SELECT 1 FROM Appointment a
                     WHERE a.doctor_id = d.doctor_id
-                      AND a.appointment_date = TRUNC(SYSDATE) + 2
+                      AND a.appointment_date = HMS_Today() + 2
                       AND a.appointment_time = '10:30'
                       AND a.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation'))
    AND NOT EXISTS (SELECT 1 FROM Appointment a
                     WHERE a.patient_id = p.patient_id
-                      AND a.appointment_date = TRUNC(SYSDATE) + 2
+                      AND a.appointment_date = HMS_Today() + 2
                       AND a.appointment_time = '10:30');
 
 -- Seed a completed history through the valid lifecycle. The block first checks
@@ -148,16 +148,16 @@ BEGIN
        AND d.email = 'arjun.nair@example.test'
        AND NOT EXISTS (SELECT 1 FROM Appointment a
                         WHERE a.patient_id = p.patient_id
-                          AND a.appointment_date = TRUNC(SYSDATE)
+                          AND a.appointment_date = HMS_Today()
                           AND a.appointment_time = '11:00')
        AND NOT EXISTS (SELECT 1 FROM Appointment a
                         WHERE a.doctor_id = d.doctor_id
-                          AND a.appointment_date = TRUNC(SYSDATE)
+                          AND a.appointment_date = HMS_Today()
                           AND a.appointment_time = '11:00'
                           AND a.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation'));
 
     INSERT INTO Appointment (patient_id, doctor_id, appointment_date, appointment_time, status)
-    VALUES (v_patient_id, v_doctor_id, TRUNC(SYSDATE), '11:00', 'Scheduled')
+    VALUES (v_patient_id, v_doctor_id, HMS_Today(), '11:00', 'Scheduled')
     RETURNING appointment_id INTO v_appointment_id;
     UPDATE Appointment SET status = 'Checked In' WHERE appointment_id = v_appointment_id;
     UPDATE Appointment SET status = 'Waiting' WHERE appointment_id = v_appointment_id;
@@ -182,16 +182,16 @@ BEGIN
        AND d.email = 'rohan.das@example.test'
        AND NOT EXISTS (SELECT 1 FROM Appointment a
                         WHERE a.patient_id = p.patient_id
-                          AND a.appointment_date = TRUNC(SYSDATE) + 4
+                          AND a.appointment_date = HMS_Today() + 4
                           AND a.appointment_time = '14:00')
        AND NOT EXISTS (SELECT 1 FROM Appointment a
                         WHERE a.doctor_id = d.doctor_id
-                          AND a.appointment_date = TRUNC(SYSDATE) + 4
+                          AND a.appointment_date = HMS_Today() + 4
                           AND a.appointment_time = '14:00'
                           AND a.status IN ('Scheduled', 'Checked In', 'Waiting', 'In Consultation'));
 
     INSERT INTO Appointment (patient_id, doctor_id, appointment_date, appointment_time, status)
-    VALUES (v_patient_id, v_doctor_id, TRUNC(SYSDATE) + 4, '14:00', 'Scheduled')
+    VALUES (v_patient_id, v_doctor_id, HMS_Today() + 4, '14:00', 'Scheduled')
     RETURNING appointment_id INTO v_appointment_id;
     UPDATE Appointment SET status = 'Cancelled' WHERE appointment_id = v_appointment_id;
 EXCEPTION
@@ -201,7 +201,7 @@ END;
 
 -- One active admission (R-101 becomes Occupied through the trigger) and one past stay.
 INSERT INTO Admission (patient_id, room_id, admission_date)
-SELECT p.patient_id, r.room_id, TRUNC(SYSDATE) - 1
+SELECT p.patient_id, r.room_id, HMS_Today() - 1
   FROM Patient p CROSS JOIN Room r
  WHERE p.phone = '+91-90001-20005' AND r.room_number = 'R-101'
    AND r.availability_status = 'Available'
@@ -222,67 +222,67 @@ BEGIN
        AND r.availability_status = 'Available'
        AND NOT EXISTS (SELECT 1 FROM Admission a WHERE a.patient_id = p.patient_id
                         AND (a.discharge_date IS NULL OR
-                             (a.admission_date = TRUNC(SYSDATE) - 10 AND a.room_id = r.room_id)))
+                             (a.admission_date = HMS_Today() - 10 AND a.room_id = r.room_id)))
        AND NOT EXISTS (SELECT 1 FROM Admission a WHERE a.room_id = r.room_id AND a.discharge_date IS NULL);
     INSERT INTO Admission (patient_id, room_id, admission_date)
-    VALUES (v_patient, v_room, TRUNC(SYSDATE) - 10) RETURNING admission_id INTO v_admission;
-    UPDATE Admission SET discharge_date = TRUNC(SYSDATE) - 7 WHERE admission_id = v_admission;
+    VALUES (v_patient, v_room, HMS_Today() - 10) RETURNING admission_id INTO v_admission;
+    UPDATE Admission SET discharge_date = HMS_Today() - 7 WHERE admission_id = v_admission;
 EXCEPTION WHEN NO_DATA_FOUND THEN NULL;
 END;
 /
 
 -- Prescription records are clinical instructions only; creating one does not dispense stock.
 INSERT INTO Prescription (patient_id, doctor_id, medicine_id, dosage, duration, prescription_date)
-SELECT p.patient_id, d.doctor_id, m.medicine_id, '1 tablet after meals', '5 days', TRUNC(SYSDATE)
+SELECT p.patient_id, d.doctor_id, m.medicine_id, '1 tablet after meals', '5 days', HMS_Today()
   FROM Patient p CROSS JOIN Doctor d CROSS JOIN Medicine m
  WHERE p.phone = '+91-90001-20001' AND d.email = 'meera.raman@example.test'
    AND m.medicine_name = 'Amlodipine 5 mg'
    AND NOT EXISTS (SELECT 1 FROM Prescription x
                     WHERE x.patient_id = p.patient_id AND x.medicine_id = m.medicine_id
-                      AND x.prescription_date = TRUNC(SYSDATE));
+                      AND x.prescription_date = HMS_Today());
 INSERT INTO Prescription (patient_id, doctor_id, medicine_id, dosage, duration, prescription_date)
-SELECT p.patient_id, d.doctor_id, m.medicine_id, '1 tablet every 6 hours as needed', '3 days', TRUNC(SYSDATE)
+SELECT p.patient_id, d.doctor_id, m.medicine_id, '1 tablet every 6 hours as needed', '3 days', HMS_Today()
   FROM Patient p CROSS JOIN Doctor d CROSS JOIN Medicine m
  WHERE p.phone = '+91-90001-20003' AND d.email = 'sana.joseph@example.test'
    AND m.medicine_name = 'Paracetamol 500 mg'
    AND NOT EXISTS (SELECT 1 FROM Prescription x
                     WHERE x.patient_id = p.patient_id AND x.medicine_id = m.medicine_id
-                      AND x.prescription_date = TRUNC(SYSDATE));
+                      AND x.prescription_date = HMS_Today());
 INSERT INTO Prescription (patient_id, doctor_id, medicine_id, dosage, duration, prescription_date)
-SELECT p.patient_id, d.doctor_id, m.medicine_id, '5 ml twice daily', '7 days', TRUNC(SYSDATE)
+SELECT p.patient_id, d.doctor_id, m.medicine_id, '5 ml twice daily', '7 days', HMS_Today()
   FROM Patient p CROSS JOIN Doctor d CROSS JOIN Medicine m
  WHERE p.phone = '+91-90001-20005' AND d.email = 'kavya.iyer@example.test'
    AND m.medicine_name = 'Amoxicillin 250 mg'
    AND NOT EXISTS (SELECT 1 FROM Prescription x
                     WHERE x.patient_id = p.patient_id AND x.medicine_id = m.medicine_id
-                      AND x.prescription_date = TRUNC(SYSDATE));
+                      AND x.prescription_date = HMS_Today());
 
 -- Bills (total_amount is generated by Oracle from its component charges).
 INSERT INTO Bill (patient_id, bill_date, consultation_charge, room_charge, medicine_charge, payment_status)
-SELECT p.patient_id, TRUNC(SYSDATE) - 1, 500, 0, 125, 'Paid'
+SELECT p.patient_id, HMS_Today() - 1, 500, 0, 125, 'Paid'
   FROM Patient p WHERE p.phone = '+91-90001-20001'
    AND NOT EXISTS (SELECT 1 FROM Bill b WHERE b.patient_id = p.patient_id
-                    AND b.bill_date = TRUNC(SYSDATE) - 1 AND b.consultation_charge = 500);
+                    AND b.bill_date = HMS_Today() - 1 AND b.consultation_charge = 500);
 INSERT INTO Bill (patient_id, bill_date, consultation_charge, room_charge, medicine_charge, payment_status)
-SELECT p.patient_id, TRUNC(SYSDATE), 400, 0, 18, 'Pending'
+SELECT p.patient_id, HMS_Today(), 400, 0, 18, 'Pending'
   FROM Patient p WHERE p.phone = '+91-90001-20002'
    AND NOT EXISTS (SELECT 1 FROM Bill b WHERE b.patient_id = p.patient_id
-                    AND b.bill_date = TRUNC(SYSDATE) AND b.consultation_charge = 400);
+                    AND b.bill_date = HMS_Today() AND b.consultation_charge = 400);
 INSERT INTO Bill (patient_id, bill_date, consultation_charge, room_charge, medicine_charge, payment_status)
-SELECT p.patient_id, TRUNC(SYSDATE) - 2, 650, 1800, 44, 'Pending'
+SELECT p.patient_id, HMS_Today() - 2, 650, 1800, 44, 'Pending'
   FROM Patient p WHERE p.phone = '+91-90001-20005'
    AND NOT EXISTS (SELECT 1 FROM Bill b WHERE b.patient_id = p.patient_id
-                    AND b.bill_date = TRUNC(SYSDATE) - 2 AND b.consultation_charge = 650);
+                    AND b.bill_date = HMS_Today() - 2 AND b.consultation_charge = 650);
 INSERT INTO Bill (patient_id, bill_date, consultation_charge, room_charge, medicine_charge, payment_status)
-SELECT p.patient_id, TRUNC(SYSDATE) - 4, 350, 0, 12.50, 'Paid'
+SELECT p.patient_id, HMS_Today() - 4, 350, 0, 12.50, 'Paid'
   FROM Patient p WHERE p.phone = '+91-90001-20003'
    AND NOT EXISTS (SELECT 1 FROM Bill b WHERE b.patient_id = p.patient_id
-                    AND b.bill_date = TRUNC(SYSDATE) - 4 AND b.consultation_charge = 350);
+                    AND b.bill_date = HMS_Today() - 4 AND b.consultation_charge = 350);
 INSERT INTO Bill (patient_id, bill_date, consultation_charge, room_charge, medicine_charge, payment_status)
-SELECT p.patient_id, TRUNC(SYSDATE), 300, 0, 0, 'Pending'
+SELECT p.patient_id, HMS_Today(), 300, 0, 0, 'Pending'
   FROM Patient p WHERE p.phone = '+91-90001-20007'
    AND NOT EXISTS (SELECT 1 FROM Bill b WHERE b.patient_id = p.patient_id
-                    AND b.bill_date = TRUNC(SYSDATE) AND b.consultation_charge = 300);
+                    AND b.bill_date = HMS_Today() AND b.consultation_charge = 300);
 
 COMMIT;
 PROMPT Fictional demo data inserted (or already present for this run date).

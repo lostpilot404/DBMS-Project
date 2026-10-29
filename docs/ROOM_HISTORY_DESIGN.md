@@ -1,3 +1,13 @@
+# Room history — v6 implementation status
+
+Admission is authoritative. Shared installer `sql/05_integrity_objects.sql` guards Room and Admission_Room_Stay, maintains observations atomically via a private-state package, retains history and takes the global write mutex first. Migration002 preserves legacy snapshots with unknown intervals;006 installs corrective guards without inventing prior transfers. Patient timelines no longer relabel the admission's original room using current room_id; room details query immutable stay rows to find former occupants. Recording timestamps are server-local observations, not recovered clinical effective times. Runtime is not granted package execution; owners/DBAs remain privileged. Oracle compilation, race and rollback proof remains pending.
+
+[Runbook](MIGRATION_RUNBOOK.md), [current defects](DEFECT_REGISTER.md), [campaign evidence](REPAIR_CAMPAIGN.md).
+
+---
+
+> **Historical design below:** superseded proposals/limitations are retained for provenance, not current implementation status. In particular direct projection bypasses and “not implemented” financial/room-history statements below describe an earlier snapshot.
+
 # Room history implementation note
 
 The historical design below predates the current code. `Admission_Room_Stay`, the admission history trigger, admission-detail view, patient history endpoint, report, and `sql/migrations/002_room_history.sql` are now implemented but **not executed or verified on Oracle**. Migration records one legacy snapshot with unknown times per existing admission; the previous rooms cannot be recovered. New timestamps represent database recording time, not effective historical time. The existing Room and Admission columns remain synchronized through triggers during normal Admission mutations; direct Room/history DML can bypass consistency and remains unresolved. See README for safety and migration instructions.

@@ -1,3 +1,5 @@
+> **Historical reference, not current verification (2026-10-29):** Older “current”, table/report counts, missing-feature and no-browser statements below describe their original snapshot only. Current v6 implementation and evidence are in [REPAIR_CAMPAIGN.md](REPAIR_CAMPAIGN.md), [PROJECT_REPORT.md](PROJECT_REPORT.md) and [DEFECT_REGISTER.md](DEFECT_REGISTER.md). No live Oracle execution has been performed; real Chromium fixture automation is now available. Original audit/acceptance text is preserved below.
+
 # Database model audit — static assessment
 
 Baseline `5db998c9c2205baee51e3718bd724a7a3aba28a2`; no Oracle metadata or DDL execution was available. The absent `R1.pdf` prevents independent verification of assignment attributes. Below, `!` means NOT NULL, `?` nullable; identity keys and data types refer to `sql/01_create_schema.sql`. Oracle DATE includes a time; the UI/API usually supplies midnight, so an actual admission/discharge time is not captured. VARCHAR2 byte/character semantics depend on database configuration; Python length validation is not proof it fits Oracle byte limits.

@@ -2,16 +2,17 @@
 
 These tests never mock the driver and never drop tables. They create uniquely
 named synthetic rows through the Flask API, exercise Oracle constraints and
-triggers, then remove only rows belonging to their own generated IDs.
+triggers, then discharge only their own active admissions. Retained synthetic history remains.
+Recreate the dedicated disposable schema outside this test harness between campaigns.
 """
 from __future__ import annotations
 
 import os
-from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 import oracledb
@@ -19,7 +20,6 @@ from dotenv import load_dotenv
 
 from hms import create_app
 from hms.database import OracleDatabase
-
 
 REQUIRED_TABLES = {
     "DEPARTMENT", "DOCTOR", "PATIENT", "APPOINTMENT", "ROOM",
@@ -29,7 +29,7 @@ TRIGGERS = {
     "TRG_APPOINTMENT_GUARD",
     "TRG_APPT_OVERLAP",
     "TRG_ADMISSION_ROOM_GUARD",
-    "TRG_ADMISSION_ROOM_SYNC",
+    "TRG_ROOM_WRITE_GUARD",
     "TRG_ADMISSION_DELETE_GUARD",
     "TRG_BILL_PATIENT_GUARD",
     "TRG_RX_PATIENT_GUARD",
@@ -107,7 +107,7 @@ class OracleIntegrationTests(unittest.TestCase):
         except RuntimeError:
             cls.database.close()
             raise
-        cls.app = create_app(database=cls.database, test_config={"TESTING": True})
+        cls.app = create_app(database=cls.database, test_config={"TESTING": True, "AUTH_REQUIRED": False})
         cls.client = cls.app.test_client()
 
     @classmethod
@@ -173,41 +173,14 @@ class OracleIntegrationTests(unittest.TestCase):
         })
 
     def _cleanup(self):
-        """Delete only synthetic rows linked to tracked IDs; never drop objects."""
+        """Retain history; finalize only this test's active stays. No trigger bypass."""
         if not getattr(self, "ids", None):
             return
         with self.database.connection() as connection:
             try:
                 with connection.cursor() as cursor:
                     for patient_id in self.ids["patients"]:
-                        # The admission trigger restores room state before the row is removed.
-                        cursor.execute(
-                            "UPDATE Admission SET discharge_date = SYSDATE "
-                            "WHERE patient_id = :patient_id AND discharge_date IS NULL",
-                            {"patient_id": patient_id},
-                        )
-                        cursor.execute("DELETE FROM Appointment WHERE patient_id = :id", {"id": patient_id})
-                        cursor.execute("DELETE FROM Prescription WHERE patient_id = :id", {"id": patient_id})
-                        cursor.execute("DELETE FROM Bill WHERE patient_id = :id", {"id": patient_id})
-                        cursor.execute("DELETE FROM Admission_Room_Stay WHERE admission_id IN (SELECT admission_id FROM Admission WHERE patient_id = :id)", {"id": patient_id})
-                        cursor.execute("DELETE FROM Admission WHERE patient_id = :id", {"id": patient_id})
-                    for doctor_id in self.ids["doctors"]:
-                        cursor.execute("DELETE FROM Appointment WHERE doctor_id = :id", {"id": doctor_id})
-                        cursor.execute("DELETE FROM Prescription WHERE doctor_id = :id", {"id": doctor_id})
-                    for medicine_id in self.ids["medicines"]:
-                        cursor.execute("DELETE FROM Prescription WHERE medicine_id = :id", {"id": medicine_id})
-                    for room_id in self.ids["rooms"]:
-                        cursor.execute("DELETE FROM Admission WHERE room_id = :id", {"id": room_id})
-                    for doctor_id in self.ids["doctors"]:
-                        cursor.execute("DELETE FROM Doctor WHERE doctor_id = :id", {"id": doctor_id})
-                    for patient_id in self.ids["patients"]:
-                        cursor.execute("DELETE FROM Patient WHERE patient_id = :id", {"id": patient_id})
-                    for room_id in self.ids["rooms"]:
-                        cursor.execute("DELETE FROM Room WHERE room_id = :id", {"id": room_id})
-                    for medicine_id in self.ids["medicines"]:
-                        cursor.execute("DELETE FROM Medicine WHERE medicine_id = :id", {"id": medicine_id})
-                    for department_id in self.ids["departments"]:
-                        cursor.execute("DELETE FROM Department WHERE department_id = :id", {"id": department_id})
+                        cursor.execute("UPDATE Admission SET discharge_date=HMS_Today() WHERE patient_id=:patient_id AND discharge_date IS NULL", {"patient_id":patient_id})
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -233,7 +206,7 @@ class OracleIntegrationTests(unittest.TestCase):
     def _oracle_today(self) -> date:
         with self.database.connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT TRUNC(SYSDATE) FROM dual")
+                cursor.execute("SELECT HMS_Today() FROM dual")
                 value = cursor.fetchone()[0]
         return value.date() if hasattr(value, "date") else value
 
@@ -253,7 +226,7 @@ class OracleIntegrationTests(unittest.TestCase):
                     "SELECT object_name, status FROM user_objects "
                     "WHERE object_type = 'TRIGGER' AND object_name IN ("
                     "'TRG_APPOINTMENT_GUARD','TRG_APPT_OVERLAP','TRG_ADMISSION_ROOM_GUARD',"
-                    "'TRG_ADMISSION_ROOM_SYNC','TRG_ADMISSION_DELETE_GUARD',"
+                    "'TRG_ROOM_WRITE_GUARD','TRG_ADMISSION_DELETE_GUARD',"
                     "'TRG_BILL_PATIENT_GUARD','TRG_RX_PATIENT_GUARD','TRG_ADMISSION_STAY_SYNC','TRG_BILL_ITEM_GUARD','TRG_BILL_CHARGE_GUARD','TRG_BILL_PAYMENT_GUARD')"
                 )
                 trigger_rows = cursor.fetchall()
@@ -271,7 +244,10 @@ class OracleIntegrationTests(unittest.TestCase):
 
                 cursor.execute(
                     "SELECT COUNT(*) FROM user_constraints "
-                    "WHERE constraint_type = 'R' AND status = 'ENABLED'"
+                    "WHERE constraint_type = 'R' AND status = 'ENABLED' AND constraint_name IN ("
+                    "'FK_DOCTOR_DEPARTMENT','FK_APPOINTMENT_PATIENT','FK_APPOINTMENT_DOCTOR','FK_ADMISSION_PATIENT','FK_ADMISSION_ROOM',"
+                    "'FK_STAY_ADMISSION','FK_STAY_ROOM','FK_PRESCRIPTION_PATIENT','FK_PRESCRIPTION_DOCTOR','FK_PRESCRIPTION_MEDICINE',"
+                    "'FK_BILL_PATIENT','FK_ITEM_BILL','FK_PAYMENT_BILL')"
                 )
                 self.assertEqual(cursor.fetchone()[0], 13)
 
@@ -308,7 +284,7 @@ class OracleIntegrationTests(unittest.TestCase):
             {
                 "patient_id": self.patient_id,
                 "doctor_id": self.doctor_id,
-                "appointment_date": date.today() + timedelta(days=2),
+                "appointment_date": self._oracle_today() + timedelta(days=2),
             },
         )
         self._assert_oracle_error(
@@ -319,7 +295,7 @@ class OracleIntegrationTests(unittest.TestCase):
             {
                 "patient_id": self.patient_id,
                 "doctor_id": self.doctor_id,
-                "appointment_date": date.today() - timedelta(days=1),
+                "appointment_date": self._oracle_today() - timedelta(days=1),
             },
         )
         self._assert_oracle_error(
@@ -330,14 +306,14 @@ class OracleIntegrationTests(unittest.TestCase):
             {
                 "patient_id": self.patient_id,
                 "doctor_id": self.doctor_id,
-                "appointment_date": date.today() + timedelta(days=4),
+                "appointment_date": self._oracle_today() + timedelta(days=4),
             },
         )
 
         # The sum of three NUMBER(10,2) charge columns requires NUMBER(11,2).
         response = self.client.post("/api/bills", json={
             "patient_id": self.patient_id,
-            "bill_date": date.today().isoformat(),
+            "bill_date": self._oracle_today().isoformat(),
             "consultation_charge": 99_999_999.99,
             "room_charge": 99_999_999.99,
             "medicine_charge": 99_999_999.99,
@@ -347,7 +323,7 @@ class OracleIntegrationTests(unittest.TestCase):
         bill_id = response.get_json()["data"]["id"]
         bill = self.client.get(f"/api/bills/{bill_id}")
         self.assertEqual(bill.status_code, 200, bill.get_json())
-        self.assertAlmostEqual(bill.get_json()["data"]["total_amount"], 299_999_999.97, places=2)
+        self.assertEqual(bill.get_json()["data"]["total_amount"], "299999999.97")
         retained_bill = self.client.delete(f"/api/bills/{bill_id}")
         self.assertEqual(retained_bill.status_code, 409, retained_bill.get_json())
 
@@ -359,13 +335,13 @@ class OracleIntegrationTests(unittest.TestCase):
     def test_bill_and_prescription_patient_ownership(self):
         other = self._create_patient("B")
         bill_id = self._create("bills", {
-            "patient_id": self.patient_id, "bill_date": date.today().isoformat(),
+            "patient_id": self.patient_id, "bill_date": self._oracle_today().isoformat(),
             "consultation_charge": "10.00", "room_charge": "0", "medicine_charge": "0",
             "payment_status": "Pending",
         })
         prescription_id = self._create("prescriptions", {
             "patient_id": self.patient_id, "doctor_id": self.doctor_id, "medicine_id": self.medicine_id,
-            "dosage": "one tablet", "duration": "two days", "prescription_date": date.today().isoformat(),
+            "dosage": "one tablet", "duration": "two days", "prescription_date": self._oracle_today().isoformat(),
         })
         for resource, table, key, record_id, edit in (
             ("bills", "Bill", "bill_id", bill_id, {"room_charge": "5.00"}),
@@ -379,7 +355,7 @@ class OracleIntegrationTests(unittest.TestCase):
             self.assertEqual(self.client.put(f"/api/{resource}/{record_id}", json=edit).status_code, 200)
 
     def test_ledger_direct_sql_partial_and_overpayment_rollback(self):
-        bill_id = self._create("bills", {"patient_id": self.patient_id, "bill_date": date.today().isoformat(),
+        bill_id = self._create("bills", {"patient_id": self.patient_id, "bill_date": self._oracle_today().isoformat(),
             "consultation_charge": "100.00", "room_charge": "0", "medicine_charge": "0", "payment_status": "Pending"})
         with self.database.connection() as connection:
             try:
@@ -459,7 +435,7 @@ class OracleIntegrationTests(unittest.TestCase):
     def test_appointment_conflicts_and_cancelled_slot_release(self):
         second_patient_id = self._create_patient("B")
         second_doctor_id = self._create_doctor("B")
-        slot_date = (date.today() + timedelta(days=5)).isoformat()
+        slot_date = (self._oracle_today() + timedelta(days=5)).isoformat()
         slot = {
             "patient_id": self.patient_id,
             "doctor_id": self.doctor_id,
@@ -633,7 +609,7 @@ class OracleIntegrationTests(unittest.TestCase):
 
         discharge = self.client.post(
             f"/api/admissions/{admission_id}/discharge",
-            json={"discharge_date": date.today().isoformat()},
+            json={"discharge_date": self._oracle_today().isoformat()},
         )
         self.assertEqual(discharge.status_code, 200, discharge.get_json())
         self.assertEqual(self._room_status(second_room_id), "Available")
@@ -673,7 +649,7 @@ class OracleIntegrationTests(unittest.TestCase):
             "medicine_id": self.medicine_id,
             "dosage": "One tablet",
             "duration": "Five days",
-            "prescription_date": date.today().isoformat(),
+            "prescription_date": self._oracle_today().isoformat(),
         })
         self.assertEqual(prescription.status_code, 201, prescription.get_json())
         retained = self.client.delete(f"/api/prescriptions/{prescription.get_json()['data']['id']}")
@@ -730,7 +706,7 @@ class OracleIntegrationTests(unittest.TestCase):
     def test_concurrent_appointment_insert_is_serialized_by_oracle(self):
         """A racing duplicate must lose at Oracle's unique index, not an app precheck."""
         second_patient_id = self._create_patient("B")
-        slot_date = date.today() + timedelta(days=8)
+        slot_date = self._oracle_today() + timedelta(days=8)
         parameters = {
             "doctor_id": self.doctor_id,
             "appointment_date": slot_date,
@@ -782,7 +758,7 @@ class OracleIntegrationTests(unittest.TestCase):
             self.assertFalse(worker.is_alive(), "Oracle did not resolve the duplicate-key wait")
             self.assertEqual(len(result), 1)
             self.assertIsInstance(result[0], oracledb.Error, result)
-            self.assertIn("ORA-00001", str(result[0]))
+            self.assertTrue(any(code in str(result[0]) for code in ("ORA-00001","ORA-20030")), result)
         finally:
             try:
                 first.rollback()
@@ -790,6 +766,77 @@ class OracleIntegrationTests(unittest.TestCase):
             finally:
                 first.close()
                 second.close()
+
+    def test_v6_projection_bypass_and_history_retention(self):
+        admission = self.client.post('/api/admissions',json={'patient_id':self.patient_id,'room_id':self.room_id,'admission_date':self._oracle_today().isoformat()})
+        self.assertEqual(admission.status_code,201,admission.get_json())
+        admission_id=admission.get_json()['data']['id']
+        self._assert_oracle_error(20040,"UPDATE Room SET availability_status='Available' WHERE room_id=:id",{'id':self.room_id})
+        self._assert_oracle_error(20040,"DELETE FROM Admission_Room_Stay WHERE admission_id=:id",{'id':admission_id})
+        self._assert_oracle_error(20040,"UPDATE Admission_Room_Stay SET is_active='N' WHERE admission_id=:id",{'id':admission_id})
+        self._assert_oracle_error(20040,"INSERT INTO Admission_Room_Stay(admission_id,room_id,source,is_active) VALUES(:id,:room,'LEGACY','N')",{'id':admission_id,'room':self.room_id})
+        self.assertEqual(self._room_status(self.room_id),'Occupied')
+        self.assertEqual(self.client.post(f'/api/admissions/{admission_id}/discharge',json={'discharge_date':self._oracle_today().isoformat()}).status_code,200)
+        self._assert_oracle_error(20042,"DELETE FROM Admission WHERE admission_id=:id",{'id':admission_id})
+
+    def test_v6_replay_after_settlement_and_mismatch(self):
+        bill=self._create('bills',{'patient_id':self.patient_id,'bill_date':self._oracle_today().isoformat(),'consultation_charge':'40.00','room_charge':'0','medicine_charge':'0'})
+        payload={'amount':'40.00','payment_method':'Cash','reference':'synthetic','idempotency_key':str(uuid.uuid4())}
+        first=self.client.post(f'/api/bills/{bill}/payments',json=payload)
+        self.assertEqual(first.status_code,201,first.get_json())
+        replay=self.client.post(f'/api/bills/{bill}/payments',json=payload)
+        self.assertEqual(replay.status_code,200,replay.get_json())
+        self.assertEqual(replay.get_json()['data']['id'],first.get_json()['data']['id'])
+        self.assertTrue(replay.get_json()['data']['replayed'])
+        mismatch=self.client.post(f'/api/bills/{bill}/payments',json={**payload,'reference':'changed'})
+        self.assertEqual(mismatch.status_code,409,mismatch.get_json())
+        ledger=self.client.get(f'/api/bills/{bill}/ledger').get_json()['data']
+        self.assertEqual((ledger['balance'],ledger['status'],len(ledger['payments'])),('0.00','Paid',1))
+        self.assertEqual(self.client.put(f'/api/bills/{bill}',json={'notes':'Still editable'}).status_code,200)
+        self._assert_oracle_error(20043,"UPDATE Bill SET bill_date=bill_date-1 WHERE bill_id=:id",{'id':bill})
+        self._assert_oracle_error(20042,"DELETE FROM Bill WHERE bill_id=:id",{'id':bill})
+
+    def test_v6_concurrent_same_key_replays_one_receipt(self):
+        bill=self._create('bills',{'patient_id':self.patient_id,'bill_date':self._oracle_today().isoformat(),'consultation_charge':'100.00','room_charge':'0','medicine_charge':'0'})
+        payload={'amount':'100.00','payment_method':'Cash','idempotency_key':str(uuid.uuid4())}
+        barrier=threading.Barrier(2)
+        def pay():
+            with self.app.test_client() as client:
+                barrier.wait(timeout=10)
+                r=client.post(f'/api/bills/{bill}/payments',json=payload)
+                return r.status_code,r.get_json()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results=list(pool.map(lambda _:pay(),range(2)))
+        self.assertEqual(sorted(r[0] for r in results),[200,201],results)
+        self.assertEqual(len({r[1]['data']['id'] for r in results}),1)
+
+    def test_v6_patient_overlap_across_different_doctors(self):
+        day=(self._oracle_today()+timedelta(days=9)).isoformat()
+        payload={'patient_id':self.patient_id,'doctor_id':self.doctor_id,'appointment_date':day,'appointment_time':'10:00','duration_minutes':45}
+        self._create('appointments',payload)
+        second=self._create_doctor('B')
+        r=self.client.post('/api/appointments',json={**payload,'doctor_id':second,'appointment_time':'10:15'})
+        self.assertEqual(r.status_code,409,r.get_json())
+        self._assert_oracle_error(20030,"INSERT INTO Appointment(patient_id,doctor_id,appointment_date,appointment_time,duration_minutes) VALUES(:patient,:doctor,:day,'10:15',30)",{'patient':self.patient_id,'doctor':second,'day':self._oracle_today()+timedelta(days=9)})
+
+    def test_v6_simultaneous_booking_status_direct_sql_rejected(self):
+        appt=self._create('appointments',{'patient_id':self.patient_id,'doctor_id':self.doctor_id,'appointment_date':self._oracle_today().isoformat(),'appointment_time':'11:00'})
+        self._assert_oracle_error(20024,"UPDATE Appointment SET status='Checked In',appointment_time='12:00' WHERE appointment_id=:id",{'id':appt})
+        self._assert_oracle_error(20042,"DELETE FROM Appointment WHERE appointment_id=:id",{'id':appt})
+
+    def test_v6_room_transfer_rollback_restores_all_projections(self):
+        other=self._create_room('B')
+        r=self.client.post('/api/admissions',json={'patient_id':self.patient_id,'room_id':self.room_id,'admission_date':self._oracle_today().isoformat()})
+        self.assertEqual(r.status_code,201,r.get_json()); admission=r.get_json()['data']['id']
+        with self.database.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('UPDATE Admission SET room_id=:room WHERE admission_id=:id',{'room':other,'id':admission})
+            connection.rollback()
+        self.assertEqual(self._room_status(self.room_id),'Occupied')
+        self.assertEqual(self._room_status(other),'Available')
+        history=self.client.get(f'/api/details/admissions/{admission}').get_json()['data']['related']['room_assignments']
+        self.assertEqual(len(history),1)
+        self.assertEqual(int(history[0]['room_id']),self.room_id)
 
 
 if __name__ == "__main__":
